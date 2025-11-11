@@ -28,7 +28,7 @@
         @create-ko="createKnockoutFromGroups"
       />
 
-      <!-- KO-Vorschau (zeigt Teams, füllt auf, optional editierbar) -->
+      <!-- KO-Vorschau -->
       <KnockoutPreview
         v-else-if="step === 6"
         :teams="koPreviewTeams"
@@ -36,7 +36,7 @@
         @confirm="handleKoPreviewConfirm"
       />
 
-      <!-- Play-In / Loser-Bracket (3 Teams → 2 weiter) -->
+      <!-- Play-In -->
       <PlayInView
         v-else-if="step === 7"
         :teams="pendingPlayIn"
@@ -55,7 +55,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, inject, onMounted, onBeforeUnmount } from 'vue'
 import HeaderBar from './components/HeaderBar.vue'
 import TournamentWizard from './components/TournamentWizard.vue'
 import GroupsView from './components/GroupsView.vue'
@@ -63,27 +63,70 @@ import KnockoutView from './components/KnockoutView.vue'
 import PlayInView from './components/PlayInView.vue'
 import KnockoutPreview from './components/KnockoutPreview.vue'
 
+const socket = inject('socket')
+
 const step = ref(0)
 const teams = ref([])
-
 const tournament = ref({
-  mode: 'groups', // 'groups' | 'round16' | 'quarter'
-  groupCount: 4
+  mode: 'groups',
+  groupCount: 4,
 })
-
-// gruppenspiele
-const groupMatches = ref({})
-
-// KO-Matches
+const groupMatches = ref({})       // { 'Gruppe A': [ {id, team1, team2, winner}, ... ] }
 const knockoutMatches = ref([])
-
-// KO-Vorschau
 const koPreviewTeams = ref([])
 
-// Sonderfall 3×3 -> 6 sichere + 3 dritte
-const pendingQualified = ref([])
-const pendingPlayIn = ref([])
+// Sonderfall 3×3
+const pendingQualified = ref([])   // 6 sichere
+const pendingPlayIn = ref([])      // 3 dritte
 
+// --------------------
+// Socket Hooks
+// --------------------
+onMounted(() => {
+  if (!socket) return
+
+  // kompletter Match-Bestand (z.B. nach /generate-groups)
+  socket.on('group_matches_updated', (payload) => {
+    // payload: { "Gruppe A": [ ... ], ... }
+    groupMatches.value = payload || {}
+  })
+
+  // einzelnes Spiel wurde geändert
+  socket.on('match_updated', ({ group, match }) => {
+    const current = { ...groupMatches.value }
+    const list = current[group] ? [...current[group]] : []
+
+    // 1. versuchen über ID zu finden
+    let idx = list.findIndex(m => m.id && match.id && m.id === match.id)
+
+    // 2. fallback über team1+team2 (falls lokal erzeugt ohne id)
+    if (idx === -1) {
+      idx = list.findIndex(
+        m => m.team1 === match.team1 && m.team2 === match.team2
+      )
+    }
+
+    if (idx !== -1) {
+      list[idx] = { ...list[idx], ...match }
+    } else {
+      // falls das Match lokal noch gar nicht existiert
+      list.push(match)
+    }
+
+    current[group] = list
+    groupMatches.value = current
+  })
+})
+
+onBeforeUnmount(() => {
+  if (!socket) return
+  socket.off('group_matches_updated')
+  socket.off('match_updated')
+})
+
+// --------------------
+// Wizard fertig
+// --------------------
 function handleFinish() {
   if (tournament.value.mode === 'groups') {
     step.value = 4
@@ -105,14 +148,18 @@ function handleFinish() {
   step.value = 0
 }
 
+// --------------------
+// Lokale Matchgenerierung (falls du nicht immer /generate-groups vom Backend rufst)
+// --------------------
 function generateRoundRobin(teamsArr) {
   const matches = []
   for (let i = 0; i < teamsArr.length; i++) {
     for (let j = i + 1; j < teamsArr.length; j++) {
       matches.push({
+        // keine id hier → deshalb oben der Fallback
         team1: teamsArr[i],
         team2: teamsArr[j],
-        winner: null
+        winner: null,
       })
     }
   }
@@ -120,16 +167,18 @@ function generateRoundRobin(teamsArr) {
 }
 
 function generateMatchesForGroup(group) {
-  // falls group.teams Objekte enthält → auf Namen mappen
-  const names = group.teams.map(t => typeof t === 'string' ? t : t.name)
+  // falls group.teams Objekte sind → Namen extrahieren
+  const names = group.teams.map((t) => (typeof t === 'string' ? t : t.name))
   const matches = generateRoundRobin(names)
   groupMatches.value = {
     ...groupMatches.value,
-    [group.name]: matches
+    [group.name]: matches,
   }
 }
 
-// kommt aus GroupsView mit den berechneten Tabellen
+// --------------------
+// KO-Erzeugung aus Gruppen
+// --------------------
 function createKnockoutFromGroups(standingsByGroup) {
   const qualified = []
   const leftovers = []
@@ -141,7 +190,7 @@ function createKnockoutFromGroups(standingsByGroup) {
     if (rows[2]) leftovers.push(rows[2].name)
   })
 
-  // Sonderfall: 6 sichere + 3 dritte
+  // 6 + 3 → Play-In
   if (qualified.length === 6 && leftovers.length === 3) {
     pendingQualified.value = qualified
     pendingPlayIn.value = leftovers
@@ -149,13 +198,12 @@ function createKnockoutFromGroups(standingsByGroup) {
     return
   }
 
-  // Standard: wir gehen in eine Vorschau und füllen dort auf
+  // Standard → Vorschau
   koPreviewTeams.value = [...qualified, ...leftovers]
   step.value = 6
 }
 
 function handlePlayInDone(winners) {
-  // winners = 2 Namen aus PlayInView
   koPreviewTeams.value = [...pendingQualified.value, ...winners]
   step.value = 6
 }
@@ -165,6 +213,9 @@ function handleKoPreviewConfirm(finalTeams) {
   step.value = 5
 }
 
+// --------------------
+// KO-Helfer
+// --------------------
 function buildKoFromTeams(allTeams, needed) {
   const trimmed = allTeams.slice(0, needed)
   return pairTeamsToMatches(trimmed)
@@ -179,7 +230,7 @@ function pairTeamsToMatches(list) {
     matches.push({
       team1: t1,
       team2: t2,
-      winner: null
+      winner: null,
     })
   }
   return matches

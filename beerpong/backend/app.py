@@ -1,42 +1,96 @@
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from flask_socketio import SocketIO, emit
 import os
-import json
+from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*")
 
-# persistenter Speicher (einfach JSON-file)
-store_path = os.path.join(os.path.dirname(__file__), "store.json")
-_default_store = {
-    "teams": [],  # list of {id, name, group}
-    "tournament": {"mode": "groups", "groupCount": 4},
-    "group_matches": {}  # { "Gruppe A": [ {team1, team2, winner}, ... ] }
-}
+# ----------------------------
+# Config
+# ----------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "tournament.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SECRET_KEY"] = "change-me"  # für socketio sessions
 
-def load_store():
-    if os.path.exists(store_path):
-        try:
-            with open(store_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return dict(_default_store)
-    return dict(_default_store)
+db = SQLAlchemy(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-def save_store(s):
-    with open(store_path, "w", encoding="utf-8") as f:
-        json.dump(s, f, ensure_ascii=False, indent=2)
+# ----------------------------
+# Models
+# ----------------------------
 
-_store = load_store()
+class Tournament(db.Model):
+    __tablename__ = "tournaments"
+    id = db.Column(db.Integer, primary_key=True)
+    mode = db.Column(db.String(20), default="groups")  # groups | quarter | round16
+    group_count = db.Column(db.Integer, default=4)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-def next_team_id():
-    if not _store["teams"]:
-        return 1
-    return max(t["id"] for t in _store["teams"]) + 1
+class Team(db.Model):
+    __tablename__ = "teams"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    group_name = db.Column(db.String(50), nullable=True)  # z.B. "Gruppe A"
+
+class GroupMatch(db.Model):
+    __tablename__ = "group_matches"
+    id = db.Column(db.Integer, primary_key=True)
+    group_name = db.Column(db.String(50), nullable=False)
+    team1 = db.Column(db.String(120), nullable=False)
+    team2 = db.Column(db.String(120), nullable=False)
+    winner = db.Column(db.String(120), nullable=True)
+    order_index = db.Column(db.Integer, nullable=False, default=0)  # für Reihenfolge
+
+# optional: Tiebreak extra speichern
+class Tiebreak(db.Model):
+    __tablename__ = "tiebreaks"
+    id = db.Column(db.Integer, primary_key=True)
+    group_name = db.Column(db.String(50), nullable=False)
+    mode = db.Column(db.String(20), nullable=False)  # 'mini' | 'rage'
+    payload = db.Column(db.Text, nullable=True)  # JSON als string
+    resolved = db.Column(db.Boolean, default=False)
+
+# einmalig anlegen
+with app.app_context():
+    db.create_all()
+    # falls kein Turnier existiert → Default
+    if not Tournament.query.first():
+        db.session.add(Tournament(mode="groups", group_count=4))
+        db.session.commit()
+
+# ----------------------------
+# Helper
+# ----------------------------
+
+def current_tournament():
+    return Tournament.query.first()
+
+def round_robin(team_names):
+    matches = []
+    order = 0
+    for i in range(len(team_names)):
+        for j in range(i + 1, len(team_names)):
+            matches.append({
+                "team1": team_names[i],
+                "team2": team_names[j],
+                "order_index": order
+            })
+            order += 1
+    return matches
+
+# ----------------------------
+# API: Teams
+# ----------------------------
 
 @app.get("/teams")
 def get_teams():
-    return jsonify(_store["teams"])
+    teams = Team.query.order_by(Team.id).all()
+    return jsonify([{"id": t.id, "name": t.name, "group": t.group_name} for t in teams])
 
 @app.post("/teams")
 def add_team():
@@ -44,102 +98,150 @@ def add_team():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Name required"}), 400
-    team = {"id": next_team_id(), "name": name, "group": data.get("group")}
-    _store["teams"].append(team)
-    save_store(_store)
-    return jsonify(team), 201
+    team = Team(name=name, group_name=data.get("group"))
+    db.session.add(team)
+    db.session.commit()
+    # broadcast neue Liste
+    socketio.emit("teams_updated", {"teams": [{"id": team.id, "name": team.name, "group": team.group_name}]}, broadcast=True)
+    return jsonify({"id": team.id, "name": team.name, "group": team.group_name}), 201
 
 @app.delete("/teams/<int:team_id>")
 def delete_team(team_id):
-    teams = _store["teams"]
-    idx = next((i for i, t in enumerate(teams) if t["id"] == team_id), None)
-    if idx is None:
-        return jsonify({"error": "Team not found"}), 404
-    teams.pop(idx)
-    save_store(_store)
+    t = Team.query.get(team_id)
+    if not t:
+      return jsonify({"error": "not found"}), 404
+    db.session.delete(t)
+    db.session.commit()
+    socketio.emit("teams_deleted", {"id": team_id}, broadcast=True)
     return jsonify({"status": "deleted"})
+
+# ----------------------------
+# API: Tournament
+# ----------------------------
 
 @app.get("/tournament")
 def get_tournament():
-    return jsonify(_store["tournament"])
+    t = current_tournament()
+    return jsonify({"mode": t.mode, "groupCount": t.group_count, "id": t.id})
 
 @app.post("/tournament")
 def update_tournament():
     data = request.json or {}
-    # einfache Validierung
-    mode = data.get("mode", _store["tournament"].get("mode"))
-    group_count = data.get("groupCount", _store["tournament"].get("groupCount"))
-    _store["tournament"]["mode"] = mode
-    _store["tournament"]["groupCount"] = int(group_count) if group_count is not None else None
-    save_store(_store)
-    return jsonify(_store["tournament"])
+    t = current_tournament()
+    if "mode" in data:
+        t.mode = data["mode"]
+    if "groupCount" in data:
+        t.group_count = int(data["groupCount"])
+    db.session.commit()
+    socketio.emit("tournament_updated", {"mode": t.mode, "groupCount": t.group_count}, broadcast=True)
+    return jsonify({"mode": t.mode, "groupCount": t.group_count})
 
-@app.get("/group-matches")
-def get_group_matches():
-    return jsonify(_store["group_matches"])
-
-def generate_round_robin(teams_arr):
-    matches = []
-    for i in range(len(teams_arr)):
-        for j in range(i + 1, len(teams_arr)):
-            matches.append({"team1": teams_arr[i], "team2": teams_arr[j], "winner": None})
-    return matches
+# ----------------------------
+# API: Gruppen generieren
+# ----------------------------
 
 @app.post("/generate-groups")
 def generate_groups():
-    # verteilt Teams auf Gruppen und erstellt Gruppenspiele (Round-Robin)
-    groups = []
-    count = _store["tournament"].get("groupCount") or 4
-    group_letters = ["A","B","C","D","E","F","G","H"]
-    groups_names = [f"Gruppe {group_letters[i] if i < len(group_letters) else i+1}" for i in range(count)]
+    t = current_tournament()
+    group_count = t.group_count or 4
+    letters = ["A","B","C","D","E","F","G","H"]
+    group_names = [f"Gruppe {letters[i] if i < len(letters) else i+1}" for i in range(group_count)]
 
-    # clear previous groups and matches
-    for t in _store["teams"]:
-        t["group"] = None
-    _store["group_matches"] = {}
+    teams = Team.query.order_by(Team.id).all()
 
-    # round-robin assignment by index
-    for idx, t in enumerate(_store["teams"]):
-        group_idx = idx % count
-        t["group"] = groups_names[group_idx]
+    # alte Matches löschen
+    GroupMatch.query.delete()
+    db.session.commit()
 
-    # build matches per group
-    grouped = {}
-    for g in groups_names:
-        team_names = [t["name"] for t in _store["teams"] if t.get("group") == g]
-        grouped[g] = generate_round_robin(team_names)
-    _store["group_matches"] = grouped
-    save_store(_store)
-    return jsonify({"status": "groups-assigned", "groups": grouped})
+    # Teams auf Gruppen verteilen
+    for idx, team in enumerate(teams):
+        gname = group_names[idx % group_count]
+        team.group_name = gname
+    db.session.commit()
 
-@app.post("/group-matches/<group_name>/<int:match_index>/winner")
-def set_match_winner(group_name, match_index):
+    # neue Matches erzeugen
+    for gname in group_names:
+      names = [t.name for t in teams if t.group_name == gname]
+      rr = round_robin(names)
+      for m in rr:
+          gm = GroupMatch(
+              group_name=gname,
+              team1=m["team1"],
+              team2=m["team2"],
+              order_index=m["order_index"],
+              winner=None
+          )
+          db.session.add(gm)
+    db.session.commit()
+
+    # broadcast
+    socketio.emit("group_matches_updated", get_group_matches_payload(), broadcast=True)
+
+    return jsonify({"status": "groups-assigned", "groups": get_group_matches_payload()})
+
+def get_group_matches_payload():
+    all_matches = GroupMatch.query.order_by(GroupMatch.group_name, GroupMatch.order_index).all()
+    out = {}
+    for m in all_matches:
+        out.setdefault(m.group_name, []).append({
+            "id": m.id,
+            "team1": m.team1,
+            "team2": m.team2,
+            "winner": m.winner
+        })
+    return out
+
+@app.get("/group-matches")
+def get_group_matches():
+    return jsonify(get_group_matches_payload())
+
+# ----------------------------
+# API: Sieger setzen
+# ----------------------------
+
+@app.post("/group-matches/<group_name>/<int:match_id>/winner")
+def set_match_winner(group_name, match_id):
     data = request.json or {}
     winner = data.get("winner")
-    if group_name not in _store["group_matches"]:
-        return jsonify({"error": "group not found"}), 404
-    matches = _store["group_matches"][group_name]
-    if match_index < 0 or match_index >= len(matches):
-        return jsonify({"error": "match index out of range"}), 400
-    matches[match_index]["winner"] = winner
-    save_store(_store)
-    return jsonify(matches[match_index])
+    match = GroupMatch.query.filter_by(id=match_id, group_name=group_name).first()
+    if not match:
+        return jsonify({"error": "match not found"}), 404
 
-@app.get("/matches")
-def get_matches():
-    # flattened list of all matches
-    all_matches = []
-    for g, ms in _store["group_matches"].items():
-        for m in ms:
-            m_copy = dict(m)
-            m_copy["group"] = g
-            all_matches.append(m_copy)
-    return jsonify(all_matches)
+    match.winner = winner
+    db.session.commit()
 
-# health
+    # allen Clients mitteilen
+    socketio.emit("match_updated", {
+        "group": group_name,
+        "match": {
+            "id": match.id,
+            "team1": match.team1,
+            "team2": match.team2,
+            "winner": match.winner
+        }
+    }, broadcast=True)
+
+    return jsonify({"status": "ok"})
+
+# ----------------------------
+# Health
+# ----------------------------
+
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
 
+# ----------------------------
+# Socket.IO einfache Events
+# ----------------------------
+
+@socketio.on("connect")
+def handle_connect():
+    emit("hello", {"msg": "connected to tournament backend"})
+
+# ----------------------------
+# Start
+# ----------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # wichtig für docker + socketio
+    socketio.run(app, host="0.0.0.0", port=5000)

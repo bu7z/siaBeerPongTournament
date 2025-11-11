@@ -54,15 +54,25 @@
             </li>
           </ul>
 
-          <!-- Tiebreak-Start -->
+          <!-- Tiebreak-Start (nur wenn noch keiner läuft / nicht eindeutig) -->
           <div
             v-if="shouldShowTiebreakControls(group.name)"
             class="px-3 py-2 border-top border-secondary"
           >
             <p class="text-secondary small mb-2">Kein eindeutiger 1./2. Platz. Tiebreak:</p>
             <div class="d-flex gap-2">
-              <button class="btn btn-sm btn-outline-light" @click="startMiniTiebreak(group.name)">Mini-Runde</button>
-              <button class="btn btn-sm btn-outline-light" @click="startRageCage(group.name)">Rage Cage</button>
+              <!-- Mini nur anbieten, wenn noch keiner lief -->
+              <button
+                v-if="!hasActiveMini(group.name)"
+                class="btn btn-sm btn-outline-light"
+                @click="startMiniTiebreak(group.name)"
+              >
+                Mini-Runde
+              </button>
+              <!-- Rage Cage immer anbieten, wenn noch nicht entschieden -->
+              <button class="btn btn-sm btn-outline-light" @click="startRageCage(group.name)">
+                Rage Cage
+              </button>
             </div>
           </div>
 
@@ -94,7 +104,7 @@
               </button>
             </div>
             <p v-if="!tiebreakState[group.name].resolved" class="text-secondary small">
-              Alle Tiebreak-Spiele entscheiden.
+              Alle Tiebreak-Spiele entscheiden – oder Rage Cage verwenden.
             </p>
           </div>
 
@@ -236,64 +246,73 @@ function getTiebreakCandidates(groupName) {
   const pts2 = rows[1].points
   const tied = rows.filter(r => r.points === pts2)
 
-  // alle 3 haben gleich viele
   if (tied.length === 3) return tied.map(t => t.name)
-
-  // nur Platz 2 und 3 gleich
   if (tied.length === 2) return tied.map(t => t.name)
-
   return []
 }
 
+// Zeige Tiebreak-Steuerung?
 function shouldShowTiebreakControls(groupName) {
+  // Wenn Gruppe nicht fertig → nichts
+  if (!isGroupFullyPlayed(groupName)) return false
+
   const candidates = getTiebreakCandidates(groupName)
   if (!candidates.length) return false
+
   const tb = tiebreakState.value[groupName]
-  if (tb && tb.resolved === false) return false
-  if (tb && tb.resolved === true) return false
-  return true
+  // noch kein Tiebreak → anzeigen
+  if (!tb) return true
+
+  // Mini lief, aber Ergebnis nicht eindeutig → Rage Cage anbieten
+  if (tb.mode === 'mini' && !tb.resolved) return true
+
+  // Rage gestartet aber noch kein Verlierer → nichts zusätzlich
+  if (tb.mode === 'rage' && !tb.resolved) return false
+
+  // resolved → nichts
+  return false
+}
+
+function hasActiveMini(groupName) {
+  const tb = tiebreakState.value[groupName]
+  return tb && tb.mode === 'mini'
 }
 
 /* Finale Anzeige unter Berücksichtigung des Tiebreaks */
 function getFinalStandings(groupName) {
+  // Basis
   const rows = baseStandings.value[groupName] || []
   const tb = tiebreakState.value[groupName]
-  if (!tb || tb.resolved === false) {
+
+  if (!tb) {
     return rows
   }
 
-  // rage: loser nach hinten
-  if (tb.mode === 'rage' && tb.loser) {
+  // Rage: Verlierer nach hinten
+  if (tb.mode === 'rage') {
+    if (!tb.loser) return rows
     const without = rows.filter(r => r.name !== tb.loser)
     const loserObj = rows.find(r => r.name === tb.loser)
     return [...without, loserObj]
   }
 
-  // mini: sortiere betroffene nach ihren Siegen
+  // Mini: Siege aus Tiebreak als Punkte addieren (+2 pro Sieg)
   if (tb.mode === 'mini') {
-    const wins = {}
+    // wins aus tiebreak zählen
+    const extraPoints = {}
     tb.matches.forEach(m => {
       if (!m.winner) return
-      wins[m.winner] = (wins[m.winner] || 0) + 1
+      extraPoints[m.winner] = (extraPoints[m.winner] || 0) + 2
     })
 
-    const affectedNames = tb.teams
-    const unaffected = rows.filter(r => !affectedNames.includes(r.name))
-    const affected = rows.filter(r => affectedNames.includes(r.name))
+    const enriched = rows.map(r => ({
+      ...r,
+      points: r.points + (extraPoints[r.name] || 0)
+    }))
 
-    const sortedAffected = affected.sort((a, b) => {
-      const wa = wins[a.name] || 0
-      const wb = wins[b.name] || 0
-      if (wb !== wa) return wb - wa
-      return a.originalIndex - b.originalIndex
-    })
-
-    // wir müssen wieder nach Punkten sortieren, aber innerhalb der betroffenen die neue Reihenfolge beibehalten
-    return [...unaffected, ...sortedAffected].sort((a, b) => {
+    // sortieren wie gewohnt
+    return enriched.sort((a, b) => {
       if (b.points !== a.points) return b.points - a.points
-      const ai = sortedAffected.findIndex(x => x.name === a.name)
-      const bi = sortedAffected.findIndex(x => x.name === b.name)
-      if (ai !== -1 && bi !== -1) return ai - bi
       return a.originalIndex - b.originalIndex
     })
   }
@@ -303,18 +322,21 @@ function getFinalStandings(groupName) {
 
 /* KO-Button Bedingung */
 const allGroupsReadyForKO = computed(() => {
-  // normale Spiele komplett?
+  // alle Gruppenspiele fertig?
   const allPlayed = baseGroups.value.every(g => isGroupFullyPlayed(g.name))
   if (!allPlayed) return false
 
-  // alle Gruppen, die Tiebreak brauchen, müssen resolved sein
+  // alle Gruppen, die Gleichstand hatten, müssen wirklich aufgelöst sein
   for (const g of baseGroups.value) {
-    const c = getTiebreakCandidates(g.name)
-    if (c.length) {
-      const tb = tiebreakState.value[g.name]
-      if (!tb || tb.resolved === false) return false
-    }
+    const name = g.name
+    const candidates = getTiebreakCandidates(name)
+    if (!candidates.length) continue
+
+    const tb = tiebreakState.value[name]
+    if (!tb) return false
+    if (!tb.resolved) return false
   }
+
   return true
 })
 
@@ -368,10 +390,40 @@ function startRageCage(groupName) {
 function setMiniWinner(groupName, matchIndex, teamName) {
   const current = tiebreakState.value[groupName]
   if (!current) return
+
+  // Gewinner setzen
   const newMatches = current.matches.map((m, i) =>
     i === matchIndex ? { ...m, winner: teamName } : m
   )
-  const resolved = newMatches.every(m => !!m.winner)
+
+  // prüfen, ob alle Tiebreak-Spiele entschieden sind
+  const allDecided = newMatches.every(m => !!m.winner)
+
+  // wenn alle entschieden sind → schauen, ob eindeutig
+  let resolved = false
+  if (allDecided) {
+    const winCounter = {}
+    newMatches.forEach(m => {
+      winCounter[m.winner] = (winCounter[m.winner] || 0) + 1
+    })
+
+    // z.B. 3 Teams → wins = [2,1,0] → eindeutig
+    const counts = Object.values(winCounter).sort((a, b) => b - a) // absteigend
+    // eindeutig, wenn es nicht sowas wie 1,1,1 oder 2,2 gibt
+    if (counts.length === 3) {
+      // 3er mini
+      if (!(counts[0] === counts[1] && counts[1] === counts[2])) {
+        resolved = true
+      }
+    } else if (counts.length === 2) {
+      // 2er mini (selten, aber möglich)
+      if (counts[0] !== counts[1]) {
+        resolved = true
+      }
+    }
+    // wenn nicht resolved → bleibt false → UI zeigt weiter Rage Cage an
+  }
+
   tiebreakState.value = {
     ...tiebreakState.value,
     [groupName]: {
@@ -396,7 +448,15 @@ function setRageLoser(groupName, teamName) {
 }
 
 function emitKo() {
+  // wir geben die Tabellen (ohne Tiebreak-Zusatzdaten) nach oben;
+  // App macht daraus KO
   emit('create-ko', baseStandings.value)
+}
+
+/* Helper */
+function truncateName(name, len = 40) {
+  if (!name) return ''
+  return name.length > len ? name.slice(0, len - 3) + '...' : name
 }
 </script>
 

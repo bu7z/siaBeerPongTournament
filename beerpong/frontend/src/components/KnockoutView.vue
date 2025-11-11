@@ -1,5 +1,5 @@
 <template>
-  <section class="mx-auto" style="max-width: 1200px;">
+  <section class="mx-auto" style="max-width: 1200px; position: relative;">
     <div class="d-flex justify-content-between align-items-center mb-4">
       <h2>KO-Phase</h2>
       <button class="btn btn-outline-light" @click="$emit('back')">Zurück</button>
@@ -13,12 +13,15 @@
       :rounds="rounds"
       @select-winner="handleSelectWinner"
     />
+
+    <ConfettiOverlay v-if="showConfetti" />
   </section>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
 import KnockoutBracket from './KnockoutBracket.vue'
+import ConfettiOverlay from './ConfettiOverlay.vue'
 
 const props = defineProps({
   matches: { type: Array, required: true }
@@ -28,10 +31,11 @@ const emit = defineEmits(['back'])
 
 const internalRounds = ref(buildInitialRounds(props.matches))
 const rounds = computed(() => internalRounds.value)
+const showConfetti = ref(false)
 
 function buildInitialRounds(firstRoundMatches) {
-  const rounds = []
-  rounds.push({
+  const r = []
+  r.push({
     label: labelForCount(firstRoundMatches.length),
     matches: firstRoundMatches.map((m, idx) => ({
       id: m.id ?? `r0-${idx}`,
@@ -44,7 +48,7 @@ function buildInitialRounds(firstRoundMatches) {
   let len = firstRoundMatches.length
   while (len > 1) {
     len = Math.floor(len / 2)
-    rounds.push({
+    r.push({
       label: labelForCount(len),
       matches: Array.from({ length: len }, (_, i) => ({
         id: `auto-${len}-${i}`,
@@ -54,7 +58,7 @@ function buildInitialRounds(firstRoundMatches) {
       }))
     })
   }
-  return rounds
+  return r
 }
 
 function labelForCount(n) {
@@ -82,5 +86,17 @@ function handleSelectWinner({ roundIndex, matchIndex, team }) {
   }
 
   internalRounds.value = copy
+
+  const isFinalRound = roundIndex === copy.length - 1
+  if (isFinalRound && winnerName && winnerName !== 'Freilos') {
+    triggerConfetti()
+  }
+}
+
+function triggerConfetti() {
+  showConfetti.value = true
+  setTimeout(() => {
+    showConfetti.value = false
+  }, 3000)
 }
 </script>
