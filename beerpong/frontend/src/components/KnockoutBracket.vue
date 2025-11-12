@@ -8,7 +8,6 @@
         :class="`round-${roundIndex}`"
       >
         <h6 v-if="round.label" class="text-secondary mb-3">{{ round.label }}</h6>
-
         <div
           v-for="(match, matchIndex) in round.matches"
           :key="match.id ?? roundIndex + '-' + matchIndex"
@@ -22,7 +21,6 @@
           >
             {{ truncate(match.team1) || '---' }}
           </button>
-
           <button
             class="team"
             :class="{ winner: match.winner === match.team2 }"
@@ -31,7 +29,6 @@
           >
             {{ truncate(match.team2) || '---' }}
           </button>
-
           <div
             v-if="roundIndex < rounds.length - 1"
             class="connector"
@@ -41,24 +38,19 @@
     </div>
   </div>
 </template>
-
 <script setup>
 const props = defineProps({
   rounds: { type: Array, required: true }
 })
-
 const emit = defineEmits(['select-winner'])
-
 function emitWinner(roundIndex, matchIndex, team) {
   emit('select-winner', { roundIndex, matchIndex, team })
 }
-
 function truncate(name, len = 18) {
   if (!name) return ''
   return name.length > len ? name.slice(0, len - 3) + '...' : name
 }
 </script>
-
 <style scoped>
 .bracket-wrapper {
   overflow-x: auto;

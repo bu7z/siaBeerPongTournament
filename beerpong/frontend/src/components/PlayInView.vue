@@ -4,17 +4,26 @@
       <h2>Play-In / Zusatzrunde</h2>
       <button class="btn btn-outline-light" @click="$emit('cancel')">Zurück</button>
     </div>
-
     <p class="text-secondary mb-3">
-      Es fehlen noch Teams für ein vollständiges KO. Diese 3 Teams spielen die letzten 2 Plätze aus.
+      Diese Teams sind in die Play-In-Runde gekommen: {{ teams.join(', ') }}.
+      <br>
+      Es fehlen noch Teams für ein vollständiges KO. Wähle, wie viele Teams weiterkommen sollen:
     </p>
-
     <div class="mb-3">
-      <button class="btn btn-sm btn-outline-light me-2" @click="startMini">3er-Mini-Runde</button>
+      <input
+        type="number"
+        class="form-control bg-dark text-light border-secondary"
+        v-model="advanceCount"
+        min="1"
+        :max="teams.length - 1"
+        placeholder="Anzahl weiterkommender Teams"
+      />
+    </div>
+    <div class="mb-3" v-if="advanceCount">
+      <button class="btn btn-sm btn-outline-light me-2" @click="startMini">Mini-Runde</button>
       <button class="btn btn-sm btn-outline-light" @click="startRage">Rage Cage</button>
     </div>
-
-    <!-- Mini-Runde -->
+    <!-- Mini-Runde (dynamisch für beliebige Team-Anzahl) -->
     <div v-if="miniMatches.length" class="card bg-dark border-secondary mb-3">
       <div class="card-body">
         <p class="text-secondary small mb-2">Mini-Runde (Sieger wählen)</p>
@@ -39,17 +48,13 @@
             {{ m.team2 }}
           </button>
         </div>
-
-        <!-- Fall 1: klarer Ausgang -->
         <button
           v-if="miniClearlyDecided"
           class="btn btn-primary btn-sm mt-2"
           @click="finishMini"
         >
-          2 Teams übernehmen
+          {{ advanceCount }} Teams übernehmen
         </button>
-
-        <!-- Fall 2: unentschieden → Rage zwischen den betroffenen -->
         <div v-else-if="miniAllDecided" class="mt-3">
           <p class="text-secondary small mb-2">
             Mini-Runde war unentschieden. Rage Cage zwischen:
@@ -59,21 +64,26 @@
               v-for="t in miniTieTeams"
               :key="t"
               class="btn btn-sm btn-outline-danger text-start"
-              @click="finishMiniRage(t)"
+              :class="selectedMiniRageLoser === t ? 'btn-danger' : 'btn-outline-danger'"
+              @click="setMiniRageLoser(t)"
             >
               {{ t }} war letzter
             </button>
           </div>
+          <button
+            v-if="selectedMiniRageLoser"
+            class="btn btn-primary btn-sm mt-2"
+            @click="finishMiniRage(selectedMiniRageLoser)"
+          >
+            {{ advanceCount }} Teams übernehmen
+          </button>
         </div>
-
-        <!-- Fall 3: noch nicht alle Mini-Spiele entschieden -->
         <p v-else class="text-secondary small mt-2">
           Alle Mini-Spiele wählen oder Rage Cage starten.
         </p>
       </div>
     </div>
-
-    <!-- Rage direkt -->
+    <!-- Rage direkt (dynamisch) -->
     <div v-if="rageMode" class="card bg-dark border-secondary">
       <div class="card-body">
         <p class="text-secondary small mb-2">Rage Cage – wer war letzter?</p>
@@ -82,30 +92,38 @@
             v-for="t in teams"
             :key="t"
             class="btn btn-sm btn-outline-danger text-start"
-            @click="finishRage(t)"
+            :class="selectedRageLoser === t ? 'btn-danger' : 'btn-outline-danger'"
+            @click="setRageLoser(t)"
           >
             {{ t }} war letzter
           </button>
         </div>
+        <button
+          v-if="selectedRageLoser"
+          class="btn btn-primary btn-sm mt-2"
+          @click="finishRage(selectedRageLoser)"
+        >
+          {{ advanceCount }} Teams übernehmen
+        </button>
       </div>
     </div>
   </section>
 </template>
-
 <script setup>
 import { ref, computed } from 'vue'
-
 const props = defineProps({
-  teams: { type: Array, required: true } // genau 3
+  teams: { type: Array, required: true },
+  qualifiedCount: { type: Number, default: 0 } // Für Kontext, wie viele schon qualified
 })
-
 const emit = defineEmits(['cancel', 'done'])
-
 const miniMatches = ref([])
 const rageMode = ref(false)
-
+const selectedMiniRageLoser = ref(null)
+const selectedRageLoser = ref(null)
+const advanceCount = ref(2) // Default 2, aber dynamisch
 function startMini() {
   rageMode.value = false
+  selectedMiniRageLoser.value = null
   const arr = props.teams
   const matches = []
   for (let i = 0; i < arr.length; i++) {
@@ -119,27 +137,26 @@ function startMini() {
   }
   miniMatches.value = matches
 }
-
 function startRage() {
   miniMatches.value = []
+  selectedRageLoser.value = null
   rageMode.value = true
 }
-
 function setMiniWinner(idx, name) {
   miniMatches.value = miniMatches.value.map((m, i) =>
     i === idx ? { ...m, winner: name } : m
   )
 }
-
-/**
- * Hilfswerte aus der Mini-Runde
- */
-
+function setMiniRageLoser(loser) {
+  selectedMiniRageLoser.value = loser
+}
+function setRageLoser(loser) {
+  selectedRageLoser.value = loser
+}
 const miniAllDecided = computed(() =>
   miniMatches.value.length > 0 &&
   miniMatches.value.every(m => !!m.winner)
 )
-
 const miniStats = computed(() => {
   const counter = {}
   props.teams.forEach(t => { counter[t] = 0 })
@@ -147,68 +164,40 @@ const miniStats = computed(() => {
     if (!m.winner) return
     counter[m.winner] = (counter[m.winner] || 0) + 1
   })
-  // array aus { name, wins }
   return Object.entries(counter).map(([name, wins]) => ({ name, wins }))
 })
-
-// war die Mini-Runde eindeutig?
 const miniClearlyDecided = computed(() => {
   if (!miniAllDecided.value) return false
-
   const stats = [...miniStats.value].sort((a, b) => b.wins - a.wins)
-  const first = stats[0]
-  const second = stats[1]
-  const third = stats[2]
-
-  // Fall: 2,1,0 → eindeutig
-  if (first.wins > second.wins && second.wins > third.wins) return true
-
-  // Fall: 2,1,1 → 1. klar, aber 2./3. gleich → nicht eindeutig
-  if (first.wins > second.wins && second.wins === third.wins) return false
-
-  // Fall: 1,1,1 → nicht eindeutig
-  if (first.wins === second.wins) return false
-
-  return false
+  // Überprüfen, ob die Top N (advanceCount) eindeutig sind
+  if (stats.length < advanceCount.value + 1) return false
+  return stats[advanceCount.value - 1].wins > stats[advanceCount.value].wins
 })
-
-// welche Teams müssen bei Unentschieden Rage spielen?
 const miniTieTeams = computed(() => {
   if (!miniAllDecided.value) return []
   const stats = [...miniStats.value].sort((a, b) => b.wins - a.wins)
-  const firstWins = stats[0].wins
-  const topGroup = stats.filter(s => s.wins === firstWins)
-
-  // mehrere auf Platz 1 → alle in Rage
-  if (topGroup.length > 1) {
-    return topGroup.map(s => s.name)
-  }
-
-  // Platz 1 eindeutig, aber Platz 2 mehrfach
-  const secondWins = stats[1].wins
-  const secondGroup = stats.filter(s => s.wins === secondWins)
-  if (secondGroup.length > 1) {
-    return secondGroup.map(s => s.name)
-  }
-
-  return []
+  const thresholdWins = stats[advanceCount.value - 1].wins
+  return stats.filter(s => s.wins === thresholdWins).map(s => s.name)
 })
-
 function finishMini() {
-  // wir wissen: miniClearlyDecided = true
   const stats = [...miniStats.value].sort((a, b) => b.wins - a.wins)
-  const winners = [stats[0].name, stats[1].name]
+  const winners = stats.slice(0, advanceCount.value).map(s => s.name)
   emit('done', winners)
 }
-
 function finishMiniRage(loser) {
-  // wir bekommen einen Loser aus der Gleichstandsgruppe
-  const winners = props.teams.filter(t => t !== loser)
+  // Für Tie, entferne Loser und nimm die Top
+  const remaining = miniTieTeams.value.filter(t => t !== loser)
+  const winners = [...miniStats.value]
+    .sort((a, b) => b.wins - a.wins)
+    .slice(0, advanceCount.value - (miniTieTeams.value.length - remaining.length))
+    .map(s => s.name)
+    .concat(remaining.slice(0, advanceCount.value - winners.length))
   emit('done', winners)
+  selectedMiniRageLoser.value = null
 }
-
 function finishRage(loser) {
-  const winners = props.teams.filter((t) => t !== loser)
+  const winners = props.teams.filter((t) => t !== loser).slice(0, advanceCount.value)
   emit('done', winners)
+  selectedRageLoser.value = null
 }
 </script>
