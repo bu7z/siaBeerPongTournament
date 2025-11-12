@@ -58,10 +58,11 @@
 import { ref, inject, onMounted, onBeforeUnmount } from 'vue'
 import HeaderBar from './components/HeaderBar.vue'
 import TournamentWizard from './components/TournamentWizard.vue'
-import GroupsView from './components/GroupsView.vue'
+import GroupsView from './components/GroupsView/GroupsView.vue'  // 👈 KORRIGIERT
 import KnockoutView from './components/KnockoutView.vue'
 import PlayInView from './components/PlayInView.vue'
 import KnockoutPreview from './components/KnockoutPreview.vue'
+
 const socket = inject('socket')
 const step = ref(0)
 const teams = ref([])

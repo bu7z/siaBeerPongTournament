@@ -12,7 +12,7 @@
   height: 42px;
   width: 42px;
   object-fit: contain;
-  background: #121212;
+  background: #000;
   border-radius: 0.5rem;
   padding: 4px;
 }

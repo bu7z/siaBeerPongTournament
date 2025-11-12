@@ -1,125 +1,139 @@
 <template>
-  <div class="bracket-wrapper">
-    <div class="bracket">
-      <div
-        v-for="(round, roundIndex) in rounds"
-        :key="roundIndex"
-        class="bracket-round"
-        :class="`round-${roundIndex}`"
-      >
-        <h6 v-if="round.label" class="text-secondary mb-3">{{ round.label }}</h6>
-        <div
-          v-for="(match, matchIndex) in round.matches"
-          :key="match.id ?? roundIndex + '-' + matchIndex"
-          class="bracket-match"
-        >
-          <button
-            class="team"
-            :class="{ winner: match.winner === match.team1 }"
-            @click="emitWinner(roundIndex, matchIndex, 'team1')"
-            :title="match.team1 || 'offen'"
-          >
-            {{ truncate(match.team1) || '---' }}
-          </button>
-          <button
-            class="team"
-            :class="{ winner: match.winner === match.team2 }"
-            @click="emitWinner(roundIndex, matchIndex, 'team2')"
-            :title="match.team2 || 'offen'"
-          >
-            {{ truncate(match.team2) || '---' }}
-          </button>
-          <div
-            v-if="roundIndex < rounds.length - 1"
-            class="connector"
-          ></div>
+  <section class="mx-auto" style="max-width: 1100px;">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2>KO-Phase – Bracket</h2>
+      <button class="btn btn-outline-light" @click="$emit('back')">Zurück</button>
+    </div>
+
+    <div class="row g-4">
+      <!-- Viertelfinale -->
+      <div class="col-md-4">
+        <div class="card bg-dark border-secondary h-100">
+          <div class="card-header"><strong>Viertelfinale</strong></div>
+          <div class="card-body">
+            <div v-for="(m, i) in qf" :key="'qf'+i" class="d-flex gap-2 mb-2">
+              <button class="btn btn-sm flex-fill"
+                      :class="m.winner===m.a?'btn-success':'btn-outline-light'"
+                      @click="setWinner('qf', i, m.a)">{{ m.a }}</button>
+              <span class="text-secondary">vs</span>
+              <button class="btn btn-sm flex-fill"
+                      :class="m.winner===m.b?'btn-success':'btn-outline-light'"
+                      @click="setWinner('qf', i, m.b)">{{ m.b }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Halbfinale -->
+      <div class="col-md-4">
+        <div class="card bg-dark border-secondary h-100">
+          <div class="card-header"><strong>Halbfinale</strong></div>
+          <div class="card-body">
+            <div v-for="(m, i) in sf" :key="'sf'+i" class="d-flex gap-2 mb-2">
+              <button class="btn btn-sm flex-fill"
+                      :class="m.winner===m.a?'btn-success':'btn-outline-light'"
+                      @click="setWinner('sf', i, m.a)">{{ m.a }}</button>
+              <span class="text-secondary">vs</span>
+              <button class="btn btn-sm flex-fill"
+                      :class="m.winner===m.b?'btn-success':'btn-outline-light'"
+                      @click="setWinner('sf', i, m.b)">{{ m.b }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Finale -->
+      <div class="col-md-4">
+        <div class="card bg-dark border-secondary h-100">
+          <div class="card-header"><strong>Finale</strong></div>
+          <div class="card-body">
+            <div v-for="(m, i) in fi" :key="'fi'+i" class="d-flex gap-2 mb-2">
+              <button class="btn btn-sm flex-fill"
+                      :class="m.winner===m.a?'btn-success':'btn-outline-light'"
+                      @click="setWinner('fi', i, m.a)">{{ m.a }}</button>
+              <span class="text-secondary">vs</span>
+              <button class="btn btn-sm flex-fill"
+                      :class="m.winner===m.b?'btn-success':'btn-outline-light'"
+                      @click="setWinner('fi', i, m.b)">{{ m.b }}</button>
+            </div>
+            <div v-if="fi.length && fi[0].winner" class="text-center mt-3">
+              <div class="h5 text-success">🏆 Sieger: {{ fi[0].winner }}</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  </div>
+
+    <div class="d-flex justify-content-end mt-3">
+      <button class="btn btn-success" :disabled="!finalWinner" @click="$emit('finish', finalWinner)">
+        Turnier abschließen
+      </button>
+    </div>
+  </section>
 </template>
+
 <script setup>
+import { reactive, computed, watchEffect } from 'vue'
+
 const props = defineProps({
-  rounds: { type: Array, required: true }
+  seeded: { type: Array, required: true }, // Länge: 8 (oder 4)
+  size:   { type: Number, required: true } // 4 oder 8 (aktuell)
 })
-const emit = defineEmits(['select-winner'])
-function emitWinner(roundIndex, matchIndex, team) {
-  emit('select-winner', { roundIndex, matchIndex, team })
+const emit = defineEmits(['back','finish'])
+
+const state = reactive({
+  qf: [],
+  sf: [],
+  fi: []
+})
+
+function buildPairs(list){
+  const pairs = []
+  for(let i=0;i<list.length;i+=2){
+    pairs.push({ a:list[i], b:list[i+1], winner:null })
+  }
+  return pairs
 }
-function truncate(name, len = 18) {
-  if (!name) return ''
-  return name.length > len ? name.slice(0, len - 3) + '...' : name
+
+watchEffect(()=>{
+  const s = props.seeded.slice(0, props.size)
+  if (props.size === 8){
+    // Seeding 1-8 (klassisch 1-8, 4-5, 3-6, 2-7)
+    const order = [0,7,3,4,2,5,1,6].map(i => s[i])
+    state.qf = buildPairs(order)
+    state.sf = buildPairs(['?', '?', '?', '?'])
+    state.fi = buildPairs(['?', '?'])
+  } else if (props.size === 4){
+    const order = [0,3,1,2].map(i => s[i])
+    state.qf = [] // kein QF
+    state.sf = buildPairs(order)
+    state.fi = buildPairs(['?', '?'])
+  } else {
+    // Fallback: behandle wie 4
+    const order = [0,3,1,2].map(i => s[i] ?? '?')
+    state.qf = []
+    state.sf = buildPairs(order)
+    state.fi = buildPairs(['?', '?'])
+  }
+})
+
+function setWinner(round, idx, team){
+  const r = state[round]
+  r[idx].winner = team
+  if (round === 'qf'){
+    // map qf winners -> sf
+    const w = state.qf.map(m => m.winner || '?')
+    state.sf = buildPairs([w[0], w[1], w[2], w[3]])
+  }
+  if (round === 'sf'){
+    const w = state.sf.map(m => m.winner || '?')
+    state.fi = buildPairs([w[0], w[1]])
+  }
 }
+
+const finalWinner = computed(()=> state.fi[0]?.winner || null)
+
+const qf = computed(()=> state.qf)
+const sf = computed(()=> state.sf)
+const fi = computed(()=> state.fi)
 </script>
-<style scoped>
-.bracket-wrapper {
-  overflow-x: auto;
-  padding-bottom: 1rem;
-}
-.bracket {
-  display: flex;
-  gap: 3rem;
-  min-height: 360px;
-}
-.bracket-round {
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-  min-width: 190px;
-}
-.bracket-match {
-  background: rgba(0, 0, 0, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  border-radius: 0.75rem;
-  padding: 0.6rem 0.6rem 1.4rem;
-  position: relative;
-  min-height: 78px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.team {
-  width: 100%;
-  background: #111;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border-radius: 0.5rem;
-  text-align: left;
-  padding: 0.35rem 0.55rem;
-  font-size: 0.78rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  position: relative;
-  z-index: 2;
-}
-.team:hover {
-  background: #171717;
-}
-.team.winner {
-  background: #198754;
-  border-color: #198754;
-  color: #fff;
-}
-.connector {
-  position: absolute;
-  right: -1.5rem;
-  top: 50%;
-  width: 1.5rem;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.08);
-  pointer-events: none;
-  z-index: 1;
-}
-.round-0 .bracket-match {
-  margin-bottom: 1.5rem;
-}
-.round-1 .bracket-match {
-  margin-top: 1.5rem;
-  margin-bottom: 3.3rem;
-}
-.round-2 .bracket-match {
-  margin-top: 3.2rem;
-}
-</style>

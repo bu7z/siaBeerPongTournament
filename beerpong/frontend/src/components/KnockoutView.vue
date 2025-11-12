@@ -1,87 +1,40 @@
 <template>
-  <section class="mx-auto" style="max-width: 1200px; position: relative;">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-      <h2>KO-Phase</h2>
-      <button class="btn btn-outline-light" @click="$emit('back')">Zurück</button>
-    </div>
-    <p class="text-secondary mb-4">
-      Klicke auf ein Team, um es als Sieger zu markieren. Die nächste Runde wird automatisch gefüllt.
-    </p>
-    <KnockoutBracket
-      :rounds="rounds"
-      @select-winner="handleSelectWinner"
+  <section>
+    <KnockoutPreview
+      v-if="phase==='preview'"
+      :teams="qualified"
+      :ko-size="koSize"
+      @back="$emit('back')"
+      @create-bracket="onCreateBracket"
     />
-    <ConfettiOverlay v-if="showConfetti" />
+    <KnockoutBracket
+      v-else
+      :seeded="seeded"
+      :size="size"
+      @back="phase='preview'"
+      @finish="$emit('finish', $event)"
+    />
   </section>
 </template>
+
 <script setup>
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
+import KnockoutPreview from './KnockoutPreview.vue'
 import KnockoutBracket from './KnockoutBracket.vue'
-import ConfettiOverlay from './ConfettiOverlay.vue'
+
 const props = defineProps({
-  matches: { type: Array, required: true }
+  qualified: { type: Array, required: true },
+  koSize: { type: Number, default: null }
 })
-const emit = defineEmits(['back'])
-const internalRounds = ref(buildInitialRounds(props.matches))
-const rounds = computed(() => internalRounds.value)
-const showConfetti = ref(false)
-function buildInitialRounds(firstRoundMatches) {
-  const r = []
-  r.push({
-    label: labelForCount(firstRoundMatches.length),
-    matches: firstRoundMatches.map((m, idx) => ({
-      id: m.id ?? `r0-${idx}`,
-      team1: m.team1,
-      team2: m.team2,
-      winner: m.winner ?? null
-    }))
-  })
-  let len = firstRoundMatches.length
-  while (len > 1) {
-    len = Math.floor(len / 2)
-    r.push({
-      label: labelForCount(len),
-      matches: Array.from({ length: len }, (_, i) => ({
-        id: `auto-${len}-${i}`,
-        team1: null,
-        team2: null,
-        winner: null
-      }))
-    })
-  }
-  return r
-}
-function labelForCount(n) {
-  if (n === 1) return 'Finale'
-  if (n === 2) return 'Halbfinale'
-  if (n === 4) return 'Viertelfinale'
-  if (n === 8) return 'Achtelfinale'
-  return 'KO-Runde'
-}
-function handleSelectWinner({ roundIndex, matchIndex, team }) {
-  const copy = JSON.parse(JSON.stringify(internalRounds.value))
-  const match = copy[roundIndex].matches[matchIndex]
-  const winnerName = team === 'team1' ? match.team1 : match.team2
-  match.winner = winnerName
-  const next = copy[roundIndex + 1]
-  if (next) {
-    const target = Math.floor(matchIndex / 2)
-    if (matchIndex % 2 === 0) {
-      next.matches[target].team1 = winnerName
-    } else {
-      next.matches[target].team2 = winnerName
-    }
-  }
-  internalRounds.value = copy
-  const isFinalRound = roundIndex === copy.length - 1
-  if (isFinalRound && winnerName && winnerName !== 'Freilos') {
-    triggerConfetti()
-  }
-}
-function triggerConfetti() {
-  showConfetti.value = true
-  setTimeout(() => {
-    showConfetti.value = false
-  }, 3000)
+const emit = defineEmits(['back','finish'])
+
+const phase = ref('preview')
+const seeded = ref([])
+const size = ref(4)
+
+function onCreateBracket(payload){
+  seeded.value = payload.seeded
+  size.value = payload.size
+  phase.value = 'bracket'
 }
 </script>
