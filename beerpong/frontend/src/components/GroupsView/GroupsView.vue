@@ -1,20 +1,22 @@
+<!-- src/components/GroupsView/GroupsView.vue -->
 <template>
   <section class="mx-auto" style="max-width: 1400px;">
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <!-- Kopf -->
+    <div class="d-flex justify-content-between align-items-center mb-2">
       <h2 class="mb-0">Gruppenphase</h2>
-      <div class="d-flex gap-2">
+      <div class="d-flex align-items-center gap-3">
+        <small v-if="saveState === 'saving'" class="text-info">Speichere…</small>
+        <small v-else-if="saveState === 'saved'" class="text-success">Gespeichert</small>
+        <small v-else-if="saveState === 'error'" class="text-danger">Speichern fehlgeschlagen</small>
         <button class="btn btn-outline-light" @click="$emit('back')">Zur Startseite</button>
         <button class="btn btn-outline-light" @click="reloadAll" :disabled="loading">Daten laden</button>
-        <button
-          class="btn btn-primary"
-          :disabled="!canProceedKo"
-          @click="goNext"
-        >
+        <button class="btn btn-primary" :disabled="!canProceedKo" @click="goNext">
           Weiter (KO/Play-In)
         </button>
       </div>
     </div>
 
+    <!-- Turnier-Info -->
     <div class="card bg-dark border-secondary mb-4 text-light">
       <div class="card-body py-3">
         <div class="row">
@@ -33,13 +35,13 @@
       </div>
     </div>
 
-    <div v-if="loading" class="alert alert-dark border-secondary my-3">
-      Lade…
-    </div>
-    <div v-if="!loading && renderGroups.length === 0" class="alert alert-dark border-secondary my-3">
+    <!-- Ladehinweise -->
+    <div v-if="loading" class="alert alert-dark border-secondary my-3">Lade…</div>
+    <div v-else-if="renderGroups.length === 0" class="alert alert-dark border-secondary my-3">
       Noch keine Gruppendaten. Klicke auf „Gruppen automatisch erzeugen“.
     </div>
 
+    <!-- Kartenraster -->
     <div class="row g-4">
       <div
         v-for="group in renderGroups"
@@ -47,6 +49,7 @@
         class="col-xl-4 col-lg-6"
       >
         <div class="card bg-dark text-light border-secondary h-100 d-flex flex-column">
+          <!-- Header -->
           <div class="card-header d-flex justify-content-between align-items-center">
             <span class="fw-semibold">{{ group.name }}</span>
             <button
@@ -58,6 +61,7 @@
             </button>
           </div>
 
+          <!-- Tabelle -->
           <div class="card-body p-0">
             <div class="table-responsive">
               <table class="table table-dark table-hover mb-0">
@@ -98,6 +102,7 @@
             </div>
           </div>
 
+          <!-- Matches + Eingaben -->
           <div
             v-if="(groupMatches[group.name] || []).length"
             class="card-footer border-top border-secondary bg-dark"
@@ -108,7 +113,7 @@
 
             <div
               v-for="(m, idx) in groupMatches[group.name]"
-              :key="group.name + '-' + idx"
+              :key="m.id || (group.name + '-' + idx)"
               class="match-entry mb-3 p-2 border border-secondary rounded"
             >
               <div class="d-flex align-items-center justify-content-between gap-2">
@@ -169,6 +174,7 @@
       </div>
     </div>
 
+    <!-- Play-In/KO-Block -->
     <div class="card bg-dark border-secondary my-4" v-if="renderGroups.length">
       <div class="card-header bg-dark border-secondary d-flex align-items-center justify-content-between">
         <strong>Play-In / KO-Vorbereitung</strong>
@@ -242,6 +248,7 @@
       </div>
     </div>
 
+    <!-- Info -->
     <div class="mt-4 p-3 border border-secondary rounded">
       <h6>ℹ️ Tiebreak-Regeln</h6>
       <p class="mb-1 text-secondary"><strong>3 Teams:</strong> Rage-Cage oder Mini-Runde.</p>
@@ -252,40 +259,40 @@
 </template>
 
 <script setup>
-import { ref, computed, watchEffect } from 'vue'
+import { ref, computed, watchEffect, onBeforeUnmount, onMounted, watch } from 'vue'
 
-/** Gemeinsame API-Base (wie in App.vue) */
+/** API-Base */
 const API = import.meta.env.VITE_API_BASE || 'http://localhost:5000'
 
-/** Props aus App.vue */
+/** Props */
 const props = defineProps({
   tournamentId: { type: Number, required: true },
   tournament:   { type: Object, required: true },
-  teams:        { type: Array,  required: true }, // Array<string>
+  teams:        { type: Array,  required: true },
 })
 
-const emit = defineEmits([
-  'back',
-  'create-ko',
-  'update:group-matches',
-])
+const emit = defineEmits(['back','create-ko','update:group-matches'])
 
-/** Lokaler State */
+/** State */
 const loading = ref(false)
-const groupMatches = ref({})     // { "Gruppe A":[{...match}, ...], ... }
-const playInResult = ref(null)   // lokales Ergebnis
-const lastGroupsMeta = ref([])   // {name,size,teams[]}
+const groupMatches = ref({})        // { "Gruppe A":[{...}], ... }
+const groupStandingsSrv = ref({})   // { "Gruppe A":[{...}], ... }
+const lastGroupsMeta = ref([])      // { name, size, teams[] }
+const playInResult = ref(null)
 
-/** Cups-Target */
+/** Save-Status */
+const saveState = ref('idle')
+let autosaveTimer = null
+const AUTOSAVE_MS = 400
+
+/** Derived */
 const cupsTarget = computed(() => {
   const v = Number(props.tournament?.cupsPerGame || 6)
   return Number.isNaN(v) ? 6 : v
 })
-
-/** Anzahl Teams */
 const teamsDone = computed(() => props.teams?.length || 0)
 
-/** Clientseitige Vorschau aus übergebenen Teams */
+/** Vorschau aus Teams (nur als Fallback) */
 const autoGroupsPreview = computed(() => {
   const n = props.teams.length
   const g = groupCountByBand(n)
@@ -297,25 +304,17 @@ const autoGroupsPreview = computed(() => {
   })
 })
 
-/**
- * Sichtbare Gruppen:
- * - Falls Matches vorhanden sind, UNION aus (Meta bzw. Preview) und Gruppen mit Matches.
- *   So bleiben alle Karten sichtbar, auch wenn nur eine Gruppe Matches hat.
- */
+/** Sichtbare Gruppen = Union(Meta, Matches) */
 const renderGroups = computed(() => {
-  const gm = groupMatches.value
-  const gmKeys = Object.keys(gm)
+  const gmKeys = Object.keys(groupMatches.value)
   const meta = (lastGroupsMeta.value?.length ? lastGroupsMeta.value : autoGroupsPreview.value)
-
   if (gmKeys.length === 0) return meta
 
-  const allNames = Array.from(new Set([
-    ...meta.map(g => g.name),
-    ...gmKeys
-  ])).sort((a, b) => a.localeCompare(b, 'de'))
+  const allNames = Array.from(new Set([...meta.map(g => g.name), ...gmKeys]))
+    .sort((a, b) => a.localeCompare(b, 'de'))
 
   return allNames.map(name => {
-    const ms = gm[name] || []
+    const ms = groupMatches.value[name] || []
     if (ms.length > 0) {
       const set = new Set()
       for (const m of ms) { if (m.team1) set.add(m.team1); if (m.team2) set.add(m.team2) }
@@ -327,7 +326,8 @@ const renderGroups = computed(() => {
   })
 })
 
-/** Backend laden (nur per Button, kein Auto-Load beim Mount) */
+/* ---------------- Backend I/O ---------------- */
+
 async function reloadAll() {
   if (!props.tournamentId) return
   loading.value = true
@@ -336,28 +336,65 @@ async function reloadAll() {
     if (!res.ok) throw new Error('load-all-data failed')
     const data = await res.json()
 
-    const gp = data.group_phase || {}
+    // robust gegen doppelten Wrapper
+    const gp = (data?.group_phase?.group_phase) ?? (data?.group_phase) ?? {}
+    const srvMatches = typeof gp.matches === 'object' ? gp.matches : {}
+    const srvGroups  = Array.isArray(gp.groups) ? gp.groups : []
+
+    groupStandingsSrv.value = normalizeStandingsMap(data?.group_standings || {})
+
+    // Matches aus Server normalisieren
     const mapped = {}
-    let groupsList = []
-
-    if (Array.isArray(gp.groups)) {
-      groupsList = gp.groups
-    }
-    if (gp && gp.matches && typeof gp.matches === 'object') {
-      Object.entries(gp.matches).forEach(([g, ms]) => {
-        mapped[g] = normalizeMatches(ms || [])
-      })
+    for (const [gName, ms] of Object.entries(srvMatches)) {
+      mapped[gName] = normalizeMatches(ms || [])
     }
 
-    // Wenn nichts gespeichert ist, nutzen wir die Vorschau nur zur Anzeige/Meta
-    if (Object.keys(mapped).length === 0 && autoGroupsPreview.value.length > 0) {
-      groupsList = autoGroupsPreview.value.map(g => ({ name: g.name, size: g.teams.length, teams: g.teams }))
+    // Meta zusammenführen: bevorzugt Server-Gruppen, sonst Standings, sonst Vorschau
+    const metaByName = {}
+
+    // 1) aus Server-Gruppen
+    for (const g of srvGroups) {
+      metaByName[g.name] = {
+        name: g.name,
+        teams: Array.isArray(g.teams) ? g.teams.slice() : [],
+      }
     }
 
+    // 2) fehlende Teams aus Standings füllen
+    for (const [gName, rows] of Object.entries(groupStandingsSrv.value)) {
+      if (!metaByName[gName]) metaByName[gName] = { name: gName, teams: [] }
+      if ((metaByName[gName].teams?.length || 0) === 0) {
+        metaByName[gName].teams = rows.map(r => r.name)
+      }
+    }
+
+    // 3) fehlende Gruppen aus Vorschau ergänzen
+    for (const g of autoGroupsPreview.value) {
+      if (!metaByName[g.name]) {
+        metaByName[g.name] = { name: g.name, teams: g.teams.slice() }
+      } else if ((metaByName[g.name].teams?.length || 0) === 0) {
+        metaByName[g.name].teams = g.teams.slice()
+      }
+    }
+
+    // 4) existierendes lastGroupsMeta nicht „leerer“ machen
+    for (const old of lastGroupsMeta.value) {
+      if (!metaByName[old.name]) metaByName[old.name] = { name: old.name, teams: old.teams.slice() }
+      if ((metaByName[old.name].teams?.length || 0) < (old.teams?.length || 0)) {
+        metaByName[old.name].teams = old.teams.slice()
+      }
+    }
+
+    // sortiertes Array
+    lastGroupsMeta.value = Object.values(metaByName)
+      .map(g => ({ name: g.name, teams: Array.isArray(g.teams) ? g.teams : [] }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'de'))
+
+    // Matches übernehmen (merge, nicht resetten)
     groupMatches.value = mapped
-    lastGroupsMeta.value = groupsList
+
     playInResult.value = null
-    emit('update:group-matches', mapped)
+    emit('update:group-matches', groupMatches.value)
   } catch (e) {
     console.error(e)
   } finally {
@@ -365,60 +402,95 @@ async function reloadAll() {
   }
 }
 
-/** Speichern */
+/** Full Save mit group_phase-Wrapper */
 async function saveGroupPhase() {
-  const groupsMeta = buildGroupsMetaFromMatches()
   const payload = {
-    groups: groupsMeta,
-    matches: Object.fromEntries(Object.entries(groupMatches.value).map(([g, ms]) => [g, ms])),
+    group_phase: {
+      groups: lastGroupsMeta.value.map(g => ({ name: g.name, size: g.teams.length, teams: g.teams })),
+      matches: Object.fromEntries(Object.entries(groupMatches.value).map(([g, ms]) => [g, ms])),
+    }
   }
+  await saveGroupPhasePayload(payload)
+}
+async function saveGroupPhasePayload(payload) {
+  if (!props.tournamentId) return
   try {
-    loading.value = true
+    saveState.value = 'saving'
     const res = await fetch(`${API}/tournaments/${props.tournamentId}/save-group-phase`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     })
     if (!res.ok) throw new Error('save-group-phase failed')
+    await reloadAll()
+    saveState.value = 'saved'
+    setTimeout(() => { if (saveState.value === 'saved') saveState.value = 'idle' }, 1200)
   } catch (e) {
     console.error(e)
-  } finally {
-    loading.value = false
+    saveState.value = 'error'
   }
 }
 
-/** Gruppen automatisch erzeugen */
+/* Auto-Load */
+onMounted(() => { reloadAll() })
+watch(() => props.tournamentId, () => { reloadAll() })
+
+/* Debounced Full Auto-Save */
+function scheduleAutoSave() {
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  autosaveTimer = setTimeout(() => { saveGroupPhase() }, AUTOSAVE_MS)
+}
+onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer) })
+
+/* --------------- Gruppen/Matches --------------- */
+
 function generateGroupsFromTeams() {
+  // nichts erzeugen, wenn schon DB-Matches existieren
   const preview = autoGroupsPreview.value
-  const out = {}
-  preview.forEach(g => {
-    out[g.name] = roundRobin(g.teams).map((m, idx) => ({
-      id: `${g.name}-${idx+1}`,
-      group_name: g.name,
-      team1: m[0],
-      team2: m[1],
-      cups_team1: 0,
-      cups_team2: 0,
-      winner: null,
-      order_index: idx,
-    }))
-  })
-  groupMatches.value = out
-  playInResult.value = null
-  lastGroupsMeta.value = preview.map(g => ({ name: g.name, size: g.teams.length, teams: g.teams }))
-  emit('update:group-matches', out)
+  const nextMatches = { ...groupMatches.value }
+  for (const g of preview) {
+    const name = g.name
+    if (!nextMatches[name] || nextMatches[name].length === 0) {
+      nextMatches[name] = roundRobin(g.teams).map((m, idx) => ({
+        id: `${name}-${idx+1}`,
+        group_name: name,
+        team1: m[0],
+        team2: m[1],
+        cups_team1: 0,
+        cups_team2: 0,
+        winner: null,
+        order_index: idx,
+      }))
+    }
+  }
+  groupMatches.value = nextMatches
+
+  // Meta nur anreichern, nicht ersetzen
+  const metaBy = Object.fromEntries(lastGroupsMeta.value.map(g => [g.name, { ...g, teams: g.teams.slice() }]))
+  for (const g of preview) {
+    if (!metaBy[g.name]) metaBy[g.name] = { name: g.name, teams: g.teams.slice() }
+    if (metaBy[g.name].teams.length === 0) metaBy[g.name].teams = g.teams.slice()
+  }
+  lastGroupsMeta.value = Object.values(metaBy).sort((a, b) => a.name.localeCompare(b.name, 'de'))
+
+  emit('update:group-matches', groupMatches.value)
+  scheduleAutoSave()
 }
 
-/** Gruppenspiele für EINZELNE Gruppe sicherstellen */
 function ensureGroupMatches(group) {
-  // Falls wir noch keine Meta haben, aus Preview ableiten (damit andere Karten sichtbar bleiben)
-  if (!lastGroupsMeta.value?.length && autoGroupsPreview.value?.length) {
-    lastGroupsMeta.value = autoGroupsPreview.value.map(g => ({ name: g.name, size: g.teams.length, teams: g.teams }))
-  }
-
   const name = group.name
+
+  // Falls Backend schon Matches hat → nichts tun
   if ((groupMatches.value[name] || []).length > 0) return
-  const teams = group.teams || []
+
+  // Teams bestimmen (Meta bevorzugt)
+  let teams = group.teams || []
+  if (!teams?.length) {
+    const meta = lastGroupsMeta.value.find(g => g.name === name)
+    if (meta?.teams?.length) teams = meta.teams
+  }
+  if (!teams?.length) return // keine Teams -> nichts tun (Tabelle bleibt, aber ohne Matches)
+
   const ms = roundRobin(teams).map((m, idx) => ({
     id: `${name}-${idx+1}`,
     group_name: name,
@@ -429,21 +501,59 @@ function ensureGroupMatches(group) {
     winner: null,
     order_index: idx,
   }))
+
+  // nur diese Gruppe mergen
   groupMatches.value = { ...groupMatches.value, [name]: ms }
   emit('update:group-matches', groupMatches.value)
+  scheduleAutoSave()
 }
 
-/** Tabellen & Play-In */
+/* ------------ Eingabe-Handler (lokal + Autosave) ----------- */
+
+function setCups(groupName, matchIndex, teamField, rawValue) {
+  const updated = { ...groupMatches.value }
+  const list = [...(updated[groupName] || [])]
+  const m = { ...list[matchIndex] }
+
+  const v = clampInt(rawValue, 0, cupsTarget.value)
+  const key = teamField === 'team1' ? 'cups_team1' : 'cups_team2'
+  m[key] = v
+
+  applyWinnerRule(m)
+  list[matchIndex] = m
+  updated[groupName] = list
+  groupMatches.value = updated
+  emit('update:group-matches', updated)
+  scheduleAutoSave()
+}
+
+function incrementCups(groupName, matchIndex, teamKey) {
+  const updated = { ...groupMatches.value }
+  const list = [...(updated[groupName] || [])]
+  const m = { ...list[matchIndex] }
+
+  const field = teamKey === 'team1' ? 'cups_team1' : 'cups_team2'
+  m[field] = clampInt(safeNum(m[field]) + 1, 0, cupsTarget.value)
+
+  applyWinnerRule(m)
+  list[matchIndex] = m
+  updated[groupName] = list
+  groupMatches.value = updated
+  emit('update:group-matches', updated)
+  scheduleAutoSave()
+}
+
+/* --------------- Tabellen/Play-In --------------- */
+
 function buildTablesForAllGroups() {
   const out = {}
   for (const g of renderGroups.value.map(x => x.name)) {
-    out[g] = computeGroupTable(groupMatches.value[g] || [])
+    out[g] = getFinalStandings(g)
   }
   return out
 }
-function recalculateTables() {
-  buildTablesForAllGroups()
-}
+function recalculateTables() { buildTablesForAllGroups() }
+
 function computePlayInLocal() {
   const tables = buildTablesForAllGroups()
   const groupNames = Object.keys(tables)
@@ -477,11 +587,7 @@ function computePlayInLocal() {
   const playin_matches = []
   for (let i = 0; i < selected.length; i += 2) {
     if (selected[i+1]) {
-      playin_matches.push({
-        match_id: i/2 + 1,
-        team1: selected[i].name,
-        team2: selected[i+1].name
-      })
+      playin_matches.push({ match_id: i/2 + 1, team1: selected[i].name, team2: selected[i+1].name })
     }
   }
 
@@ -505,7 +611,7 @@ function computePlayInLocal() {
   }
 }
 
-/** Weitergabe an App.vue */
+/** Weiter */
 const canProceedKo = computed(() => Object.keys(groupMatches.value).length > 0)
 function goNext() {
   const tables = buildTablesForAllGroups()
@@ -517,7 +623,8 @@ function goNext() {
   })
 }
 
-/** Utils */
+/* ---------------- Utils ---------------- */
+
 function normalizeMatches(list) {
   return (list || []).map((m, idx) => ({
     id: m.id ?? `${m.group_name || 'G'}-${idx+1}`,
@@ -530,6 +637,23 @@ function normalizeMatches(list) {
     order_index: m.order_index ?? idx
   }))
 }
+
+function normalizeStandingsMap(obj) {
+  const out = {}
+  for (const [g, rows] of Object.entries(obj || {})) {
+    out[g] = (rows || []).map(r => ({
+      name: String(r.name ?? ''),
+      wins: Number.isFinite(+r.wins) ? +r.wins : 0,
+      losses: Number.isFinite(+r.losses) ? +r.losses : 0,
+      points: Number.isFinite(+r.points) ? +r.points : 0,
+      cupsFor: Number.isFinite(+r.cupsFor) ? +r.cupsFor : 0,
+      cupsAgainst: Number.isFinite(+r.cupsAgainst) ? +r.cupsAgainst : 0,
+      cupsDiff: Number.isFinite(+r.cupsDiff) ? +r.cupsDiff : (Number(r.cupsFor||0) - Number(r.cupsAgainst||0)),
+    }))
+  }
+  return out
+}
+
 function guessGroupNameFromId(id) {
   if (!id || typeof id !== 'string') return null
   const m = id.match(/^(Gruppe [A-Z])/)
@@ -539,9 +663,7 @@ function roundRobin(arr) {
   const a = (arr || []).filter(Boolean)
   const ms = []
   for (let i = 0; i < a.length; i++) {
-    for (let j = i + 1; j < a.length; j++) {
-      ms.push([a[i], a[j]])
-    }
+    for (let j = i + 1; j < a.length; j++) ms.push([a[i], a[j]])
   }
   return ms
 }
@@ -555,6 +677,26 @@ function groupCountByBand(n) {
 function computeGroupNames(g) {
   return Array.from({ length: g }, (_, i) => `Gruppe ${String.fromCharCode(65 + i)}`)
 }
+
+/** Tabelle – Priorität:
+ * 1) Wenn es Matches gibt → live berechnen
+ * 2) Sonst, wenn Server-Standings vorhanden → zeigen
+ * 3) Sonst Meta-Teams mit 0-Werten
+ */
+function getFinalStandings(groupName) {
+  const matches = groupMatches.value[groupName] || []
+  if (matches.length > 0) return computeGroupTable(matches)
+
+  const srv = groupStandingsSrv.value[groupName]
+  if (Array.isArray(srv) && srv.length > 0) return srv
+
+  const meta = lastGroupsMeta.value.find(g => g.name === groupName)
+  const teams = meta?.teams ?? []
+  return teams.map(name => ({
+    name, wins: 0, losses: 0, points: 0, cupsFor: 0, cupsAgainst: 0, cupsDiff: 0
+  }))
+}
+
 function computeGroupTable(matches) {
   const rows = new Map()
   const ensure = (name) => {
@@ -582,22 +724,22 @@ function computeGroupTable(matches) {
     return x.name.localeCompare(y.name, 'de')
   })
 }
-function getFinalStandings(groupName) {
-  return computeGroupTable(groupMatches.value[groupName] || [])
+function getRowClass(idx) { return idx < 2 ? 'table-success' : '' }
+function safeNum(v) { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+function clampInt(v, min, max) {
+  const n = parseInt(v, 10)
+  const num = Number.isFinite(n) ? n : 0
+  return Math.max(min, Math.min(max, num))
 }
-function getRowClass(idx) {
-  if (idx < 2) return 'table-success'
-  return ''
-}
-
-/** Meta immer initialisieren, wenn noch leer und Preview vorhanden */
-watchEffect(() => {
-  if (!lastGroupsMeta.value?.length && autoGroupsPreview.value?.length) {
-    lastGroupsMeta.value = autoGroupsPreview.value.map(g => ({ name: g.name, size: g.teams.length, teams: g.teams }))
+function applyWinnerRule(m) {
+  const a = safeNum(m.cups_team1)
+  const b = safeNum(m.cups_team2)
+  if (a >= cupsTarget.value || b >= cupsTarget.value) {
+    if (a !== b) m.winner = a > b ? m.team1 : m.team2
+  } else if (a === b) {
+    m.winner = null
   }
-})
-
-/** KEIN auto-reload beim Mount – nur auf Button! */
+}
 </script>
 
 <style scoped>
