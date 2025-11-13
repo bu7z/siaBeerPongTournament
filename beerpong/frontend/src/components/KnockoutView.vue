@@ -102,7 +102,7 @@ import KnockoutBracket from './KnockoutBracket.vue'
 import ConfettiOverlay from './ConfettiOverlay.vue'
 
 const API =
-  `${window.location.protocol}//${window.location.hostname}:5000` || import.meta.env.VITE_API_BASE
+  `${window.location.protocol}//${window.location.hostname}:5001` || import.meta.env.VITE_API_BASE
 
 const props = defineProps({
   tournamentId: { type: Number, required: true },
