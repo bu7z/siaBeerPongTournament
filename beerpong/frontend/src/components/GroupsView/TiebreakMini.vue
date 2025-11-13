@@ -1,5 +1,5 @@
 <template>
-  <div class="alert alert-dark border-warning">
+  <div class="alert bg-dark border-warning">
     <div class="text-warning fw-bold mb-2">Mini-Tiebreak</div>
     <div class="text-light small">
       Bei exakten Gleichständen am Cut-Off entscheiden

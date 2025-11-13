@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import datetime
-from typing import Dict, List, Any
+from datetime import datetime, timezone
+from typing import Dict, List, Any, Optional
 
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
@@ -48,7 +48,7 @@ def cors_preflight(_any=None):
     return make_response(("", 204))
 
 # -------------------------------------------------
-# Models
+# Models (UTC-aware defaults)
 # -------------------------------------------------
 
 class Tournament(db.Model):
@@ -59,7 +59,7 @@ class Tournament(db.Model):
     participant_count = db.Column(db.Integer, default=8)
     cups_per_game = db.Column(db.Integer, default=6)
     finale_with_10_cups = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     current_phase = db.Column(db.String(20), default="group")  # group, playin, ko, finished
 
 
@@ -70,7 +70,7 @@ class TournamentData(db.Model):
     data_type = db.Column(db.String(20))           # 'groups', 'playin', 'group_standings', 'teams'
     group_name = db.Column(db.String(50), nullable=True)
     payload = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     tournament = db.relationship('Tournament', backref='data_entries')
 
@@ -82,7 +82,7 @@ class KOBracket(db.Model):
     bracket_type = db.Column(db.String(20))   # 'main', 'consolation'
     round_name = db.Column(db.String(50))     # 'Achtelfinale', 'Viertelfinale', ...
     match_data = db.Column(db.Text)           # JSON
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     tournament = db.relationship('Tournament', backref='ko_entries')
 
@@ -115,7 +115,8 @@ def ensure_sqlite_schema():
                 "participant_count": ("INTEGER", "8"),
                 "cups_per_game": ("INTEGER", "6"),
                 "finale_with_10_cups": ("INTEGER", "0"),
-                "created_at": ("TEXT", f"'{datetime.utcnow().isoformat(sep=' ')}'"),
+                # UTC via SQLite
+                "created_at": ("TEXT", "CURRENT_TIMESTAMP"),
                 "current_phase": ("TEXT", "'group'"),
             }
             for col, (ctype, dflt) in need.items():
@@ -132,7 +133,7 @@ def ensure_sqlite_schema():
                 "data_type": ("TEXT", None),
                 "group_name": ("TEXT", "NULL"),
                 "payload": ("TEXT", "NULL"),
-                "created_at": ("TEXT", f"'{datetime.utcnow().isoformat(sep=' ')}'"),
+                "created_at": ("TEXT", "CURRENT_TIMESTAMP"),
             }
             for col, (ctype, dflt) in need_td.items():
                 if col not in cols:
@@ -148,7 +149,7 @@ def ensure_sqlite_schema():
                 "bracket_type": ("TEXT", "'main'"),
                 "round_name": ("TEXT", "'Round'"),
                 "match_data": ("TEXT", "'{}'"),
-                "created_at": ("TEXT", f"'{datetime.utcnow().isoformat(sep=' ')}'"),
+                "created_at": ("TEXT", "CURRENT_TIMESTAMP"),
             }
             for col, (ctype, dflt) in need_ko.items():
                 if col not in cols:
@@ -164,7 +165,11 @@ with app.app_context():
 # -------------------------------------------------
 
 def json_dumps(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
+    def _default(o):
+        if isinstance(o, datetime):
+            return o.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return str(o)
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=_default)
 
 def json_loads(s: str | None) -> Any:
     if not s:
@@ -423,7 +428,7 @@ def api_load_teams(t_id: int):
     return jsonify(data or {"teams": []})
 
 # -------------------------------------------------
-# API – Gruppenphase speichern
+# API – Gruppenphase: Full Save + Single-Match Save
 # -------------------------------------------------
 
 @app.post("/tournaments/<int:t_id>/save-group-phase")
@@ -436,6 +441,84 @@ def api_save_group_phase(t_id: int):
     ))
     db.session.commit()
     return jsonify({"ok": True})
+
+@app.post("/tournaments/<int:t_id>/group-match")
+def api_save_group_match(t_id: int):
+    """Single-Match Update für Gruppenphase."""
+    Tournament.query.get_or_404(t_id)
+    body = request.json or {}
+
+    gname = (body.get("group_name") or "").strip()
+    mid = body.get("id")
+    team1 = body.get("team1")
+    team2 = body.get("team2")
+    cups1 = int(body.get("cups_team1") or 0)
+    cups2 = int(body.get("cups_team2") or 0)
+    winner = body.get("winner")
+    order_index = int(body.get("order_index") or 0)
+
+    # Aktuelles Gruppen-Payload laden
+    row = TournamentData.query.filter_by(
+        tournament_id=t_id, data_type="groups"
+    ).order_by(TournamentData.created_at.desc()).first()
+    payload = json_loads(row.payload) if row else {}
+
+    if "group_phase" in payload and isinstance(payload["group_phase"], dict):
+        # defensive: falls alter Wrapper geschrieben wurde
+        payload = payload["group_phase"]
+
+    matches_by_group: Dict[str, List[Dict[str, Any]]] = payload.get("matches") or {}
+    if not isinstance(matches_by_group, dict):
+        matches_by_group = {}
+
+    lst = matches_by_group.get(gname) or []
+    # Match per id oder order_index suchen
+    idx = -1
+    if mid:
+        for i, m in enumerate(lst):
+            if str(m.get("id")) == str(mid):
+                idx = i
+                break
+    if idx < 0:
+        for i, m in enumerate(lst):
+            if int(m.get("order_index") or -1) == order_index \
+               and m.get("team1") == team1 and m.get("team2") == team2:
+                idx = i
+                break
+
+    norm = {
+        "id": mid or f"{gname}-{order_index+1}",
+        "group_name": gname,
+        "team1": team1, "team2": team2,
+        "cups_team1": cups1, "cups_team2": cups2,
+        "winner": winner,
+        "order_index": order_index
+    }
+
+    if idx >= 0:
+        lst[idx] = norm
+    else:
+        lst.append(norm)
+    matches_by_group[gname] = lst
+    payload["matches"] = matches_by_group
+
+    # persistieren
+    TournamentData.query.filter_by(tournament_id=t_id, data_type="groups").delete()
+    db.session.add(TournamentData(
+        tournament_id=t_id, data_type="groups", payload=json_dumps(payload)
+    ))
+    # Standings neu berechnen/ablegen (best effort)
+    try:
+        standings = compute_standings_from_groups_payload(payload)
+        TournamentData.query.filter_by(tournament_id=t_id, data_type="group_standings").delete()
+        db.session.add(TournamentData(
+            tournament_id=t_id, data_type="group_standings", payload=json_dumps(standings)
+        ))
+    except Exception as e:
+        print("group-match → standings failed:", repr(e))
+
+    db.session.commit()
+    return jsonify(norm)
 
 # -------------------------------------------------
 # API – Alle Daten laden (robust)
@@ -464,7 +547,7 @@ def api_load_all(t_id: int):
     ).order_by(TournamentData.created_at.desc()).first()
     group_standings = json_loads(standings_row.payload) if standings_row else {}
 
-    # --- Teams aus Gruppen-Payload ableiten (Fallback)
+    # --- Teams ableiten (Fallback)
     def _iter_group_match_lists(payload):
         container = (payload or {}).get("matches") or (payload or {}).get("groups") or {}
         if isinstance(container, dict): return container.values()
@@ -480,7 +563,7 @@ def api_load_all(t_id: int):
 
     teams = teams_from_slot if teams_from_slot else derive_teams_from_group_phase(group_phase)
 
-    # --- Falls standings fehlen, on-the-fly berechnen (silent fail)
+    # --- Standings on-the-fly, falls fehlen
     if not group_standings and group_phase:
         try:
             group_standings = compute_standings_from_groups_payload(group_phase)
@@ -626,7 +709,7 @@ def api_load_playin(t_id: int):
     return jsonify(json_loads(row.payload) if row else {})
 
 # -------------------------------------------------
-# API – KO Bracket speichern/laden
+# API – KO Bracket: Full Save / Load / Single-Match Save
 # -------------------------------------------------
 
 @app.post("/tournaments/<int:t_id>/save-ko-bracket")
@@ -670,6 +753,49 @@ def api_load_ko(t_id: int):
         for r in rows
     ]
     return jsonify({"rounds": out})
+
+@app.post("/tournaments/<int:t_id>/ko-match")
+def api_save_ko_match(t_id: int):
+    """Single-Match Update in einer KO-Runde über round_index + match_index."""
+    Tournament.query.get_or_404(t_id)
+    body = request.json or {}
+
+    r_idx = int(body.get("round_index") if body.get("round_index") is not None else -1)
+    m_idx = int(body.get("match_index") if body.get("match_index") is not None else -1)
+    if r_idx < 0 or m_idx < 0:
+        return jsonify({"error": "round_index and match_index required"}), 400
+
+    team1 = body.get("team1")
+    team2 = body.get("team2")
+    winner = body.get("winner")
+    cups1 = int(body.get("cups_team1") or 0)
+    cups2 = int(body.get("cups_team2") or 0)
+
+    rows = KOBracket.query.filter_by(tournament_id=t_id).order_by(KOBracket.id.asc()).all()
+    if not rows or r_idx >= len(rows):
+        return jsonify({"error": "round index out of range"}), 404
+
+    r = rows[r_idx]
+    r_data = json_loads(r.match_data) or {}
+    matches: List[Dict[str, Any]] = r_data.get("matches") or []
+
+    if m_idx >= len(matches):
+        return jsonify({"error": "match index out of range"}), 404
+
+    # Update Match
+    cur = matches[m_idx] if m_idx < len(matches) else {}
+    cur.update({
+        "team1": team1, "team2": team2,
+        "winner": winner,
+        "cups_team1": cups1, "cups_team2": cups2
+    })
+    matches[m_idx] = cur
+    r_data["matches"] = matches
+    r.match_data = json_dumps(r_data)
+
+    db.session.commit()
+
+    return jsonify(cur)
 
 # -------------------------------------------------
 # Health & Fehler

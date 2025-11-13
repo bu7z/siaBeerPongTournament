@@ -1,91 +1,68 @@
 <template>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-dark table-hover mb-0">
-        <thead>
-          <tr>
-            <th scope="col" class="ps-3">#</th>
-            <th scope="col">Team</th>
-            <th scope="col" class="text-center">P</th>
-            <th scope="col" class="text-center">S</th>
-            <th scope="col" class="text-center">N</th>
-            <th scope="col" class="text-center">B+</th>
-            <th scope="col" class="text-center">B-</th>
-            <th scope="col" class="text-center">±</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="(row, idx) in standings"
-            :key="row.name + idx"
-            :class="getRowClass(idx)"
-          >
-            <td class="ps-3 fw-bold">{{ idx + 1 }}.</td>
-            <td class="text-truncate" style="max-width: 160px;" :title="row.name">
-              {{ row.name }}
-            </td>
-            <td class="text-center fw-bold">{{ row.points }}</td>
-            <td class="text-center text-success">{{ row.wins }}</td>
-            <td class="text-center text-danger">{{ row.losses }}</td>
-            <td class="text-center">{{ row.cupsFor }}</td>
-            <td class="text-center">{{ row.cupsAgainst }}</td>
-            <td class="text-center" :class="{'text-success': row.cupsDiff > 0, 'text-danger': row.cupsDiff < 0}">
-              {{ row.cupsDiff > 0 ? '+' : '' }}{{ row.cupsDiff }}
-            </td>
-          </tr>
-          <tr v-if="standings.length === 0">
-            <td colspan="8" class="text-center text-light">Noch keine Daten</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  <table class="table table-dark table-striped table-sm align-middle mb-0">
+    <thead>
+      <tr>
+        <th>Team</th>
+        <th class="text-center">P</th>
+        <th class="text-center">B+</th>
+        <th class="text-center">B-</th>
+        <th class="text-center">Diff</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="(t, idx) in sorted" :key="idx">
+        <td>{{ t.name }}</td>
+        <td class="text-center">{{ t.points }}</td>
+        <td class="text-center">{{ t.cupsFor }}</td>
+        <td class="text-center">{{ t.cupsAgainst }}</td>
+        <td class="text-center">{{ t.cupsDiff }}</td>
+      </tr>
+    </tbody>
+  </table>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watchEffect } from 'vue'
 
 const props = defineProps({
-  groupName: { type: String, required: true },
-  matches: { type: Array, default: () => [] }
+  standings: Array,
+  group: Object
 })
+const emit = defineEmits(['tiebreak'])
 
-const standings = computed(() => {
-  const rows = new Map()
-  const ensure = (name) => {
-    if (!rows.has(name)) {
-      rows.set(name, { name, wins: 0, losses: 0, points: 0, cupsFor: 0, cupsAgainst: 0, cupsDiff: 0 })
-    }
-    return rows.get(name)
-  }
-  for (const m of props.matches) {
-    if (!m?.team1 || !m?.team2) continue
-    const a = ensure(m.team1)
-    const b = ensure(m.team2)
-    const c1 = Number.isFinite(+m.cups_team1) ? +m.cups_team1 : 0
-    const c2 = Number.isFinite(+m.cups_team2) ? +m.cups_team2 : 0
-    a.cupsFor += c1; a.cupsAgainst += c2
-    b.cupsFor += c2; b.cupsAgainst += c1
-    if (m.winner === m.team1) { a.wins++; b.losses++; a.points += 2 }
-    else if (m.winner === m.team2) { b.wins++; a.losses++; b.points += 2 }
-  }
-  for (const r of rows.values()) r.cupsDiff = r.cupsFor - r.cupsAgainst
-  return Array.from(rows.values()).sort((x, y) => {
-    if (y.points !== x.points) return y.points - x.points
-    if (y.cupsDiff !== x.cupsDiff) return y.cupsDiff - x.cupsDiff
-    if (y.cupsFor !== x.cupsFor) return y.cupsFor - x.cupsFor
-    return x.name.localeCompare(y.name, 'de')
+const sorted = computed(() => {
+  return [...(props.standings || [])].sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points
+    if (b.cupsDiff !== a.cupsDiff) return b.cupsDiff - a.cupsDiff
+    if (b.cupsFor !== a.cupsFor) return b.cupsFor - a.cupsFor
+    return a.name.localeCompare(b.name, 'de')
   })
 })
 
-function getRowClass(idx) {
-  if (idx < 2) return 'table-success'
-  return ''
+function equalTripleByPointsDiff(a, b, c) {
+  return a && b && c &&
+         a.points === b.points && b.points === c.points &&
+         a.cupsDiff === b.cupsDiff && b.cupsDiff === c.cupsDiff
 }
-</script>
 
-<style scoped>
-.table-success {
-  background-color: rgba(25, 135, 84, 0.15) !important;
-}
-</style>
+watchEffect(() => {
+  const s = sorted.value
+  if (!Array.isArray(s) || s.length < 3) return
+
+  if (s.length === 3) {
+    const [t1, t2, t3] = s
+    if (equalTripleByPointsDiff(t1, t2, t3)) {
+      emit('tiebreak', { kind: 'RAGE_CAGE_3', teams: [t1.name, t2.name, t3.name] })
+      return
+    }
+  }
+  if (s.length >= 4) {
+    const [, t2, t3, t4] = s
+    if (equalTripleByPointsDiff(t2, t3, t4)) {
+      emit('tiebreak', { kind: 'REMATCH_3_OF_4', teams: [t2.name, t3.name, t4.name] })
+      return
+    }
+  }
+  emit('tiebreak', null)
+})
+</script>
