@@ -146,7 +146,7 @@ import PlayInView from './components/PlayInView.vue'
 import KnockoutPreview from './components/KnockoutPreview.vue'
 
 const API =
-  `${window.location.protocol}//${window.location.hostname}:5000` ||
+  `${window.location.protocol}//${window.location.hostname}:5001` ||
   import.meta.env.VITE_API_BASE
 
 const step = ref(0)
