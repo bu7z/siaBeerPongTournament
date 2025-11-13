@@ -1,25 +1,18 @@
 <template>
-  <div class="px-3 py-2 border-top border-secondary">
-    <p class="text-secondary small mb-2">Kein eindeutiger 1./2. Platz. Tiebreak:</p>
-    <div class="d-flex gap-2">
-      <button
-        v-if="!tiebreakState || tiebreakState.mode !== 'mini'"
-        class="btn btn-sm btn-outline-light"
-        @click="$emit('start-mini-tiebreak')"
-      >
-        Mini-Runde
-      </button>
-      <button class="btn btn-sm btn-outline-light" @click="$emit('start-rage-cage')">
-        Rage Cage
-      </button>
+  <div class="card bg-dark border-secondary">
+    <div class="card-header bg-dark border-secondary">
+      <strong>Tiebreak / Sonderfälle</strong>
+    </div>
+    <div class="card-body">
+      <div class="text-light small mb-2">
+        Tiebreaks werden automatisch über <em>Becher-Differenz</em> / <em>B+</em> / <em>Punkte</em> berücksichtigt.
+        Bei einem exakten 3er-Gleichstand am Cut-Off wird <strong class="text-warning">Rage-Cage</strong> vorgeschlagen.
+      </div>
+      <slot />
     </div>
   </div>
 </template>
 
 <script setup>
-defineProps({
-  tiebreakState: { type: Object, default: null }
-})
-
-defineEmits(['start-mini-tiebreak', 'start-rage-cage'])
+// rein presentational; Inhalte kommen über <slot>
 </script>

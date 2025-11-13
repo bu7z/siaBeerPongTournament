@@ -1,29 +1,13 @@
 <template>
-  <div class="px-3 pb-3 border-top border-secondary">
-    <p class="text-secondary small mb-2">Rage-Cage: Verlierer wählen</p>
-    <div class="d-flex flex-column gap-2">
-      <button
-        v-for="team in tiebreakState.teams"
-        :key="team"
-        class="btn btn-sm text-start"
-        :class="tiebreakState.loser === team ? 'btn-danger' : 'btn-outline-danger'"
-        @click="$emit('set-rage-loser', { teamName: team })"
-      >
-        {{ truncateName(team) }} hat verloren
-      </button>
+  <div class="alert alert-dark border-warning">
+    <div class="text-warning fw-bold mb-2">Rage-Cage erforderlich</div>
+    <div class="text-light small">
+      Exakter 3er-Gleichstand am Cut-Off → ein Team scheidet aus.
+      Trage den Verlierer später in der Play-In-Ansicht ein.
     </div>
   </div>
 </template>
 
 <script setup>
-defineProps({
-  tiebreakState: { type: Object, required: true }
-})
-
-defineEmits(['set-rage-loser'])
-
-function truncateName(name, len = 40) {
-  if (!name) return ''
-  return name.length > len ? name.slice(0, len - 3) + '...' : name
-}
+// keine Logik nötig
 </script>

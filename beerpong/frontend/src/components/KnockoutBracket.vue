@@ -1,139 +1,114 @@
 <template>
-  <section class="mx-auto" style="max-width: 1100px;">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h2>KO-Phase – Bracket</h2>
-      <button class="btn btn-outline-light" @click="$emit('back')">Zurück</button>
-    </div>
-
-    <div class="row g-4">
-      <!-- Viertelfinale -->
-      <div class="col-md-4">
+  <div class="ko-bracket w-100">
+    <div class="row g-3 flex-nowrap overflow-auto">
+      <div
+        v-for="(round, rIdx) in roundsLocal"
+        :key="rIdx"
+        class="col"
+        style="min-width: 240px;"
+      >
         <div class="card bg-dark border-secondary h-100">
-          <div class="card-header"><strong>Viertelfinale</strong></div>
-          <div class="card-body">
-            <div v-for="(m, i) in qf" :key="'qf'+i" class="d-flex gap-2 mb-2">
-              <button class="btn btn-sm flex-fill"
-                      :class="m.winner===m.a?'btn-success':'btn-outline-light'"
-                      @click="setWinner('qf', i, m.a)">{{ m.a }}</button>
-              <span class="text-secondary">vs</span>
-              <button class="btn btn-sm flex-fill"
-                      :class="m.winner===m.b?'btn-success':'btn-outline-light'"
-                      @click="setWinner('qf', i, m.b)">{{ m.b }}</button>
-            </div>
+          <div class="card-header bg-dark border-bottom border-secondary">
+            <strong>{{ round.round_name || defaultRoundName(rIdx, roundsLocal.length) }}</strong>
           </div>
-        </div>
-      </div>
 
-      <!-- Halbfinale -->
-      <div class="col-md-4">
-        <div class="card bg-dark border-secondary h-100">
-          <div class="card-header"><strong>Halbfinale</strong></div>
           <div class="card-body">
-            <div v-for="(m, i) in sf" :key="'sf'+i" class="d-flex gap-2 mb-2">
-              <button class="btn btn-sm flex-fill"
-                      :class="m.winner===m.a?'btn-success':'btn-outline-light'"
-                      @click="setWinner('sf', i, m.a)">{{ m.a }}</button>
-              <span class="text-secondary">vs</span>
-              <button class="btn btn-sm flex-fill"
-                      :class="m.winner===m.b?'btn-success':'btn-outline-light'"
-                      @click="setWinner('sf', i, m.b)">{{ m.b }}</button>
-            </div>
-          </div>
-        </div>
-      </div>
+            <div v-for="(m, mIdx) in round.matches" :key="mIdx" class="mb-3">
+              <div class="d-flex flex-column gap-1">
+                <button
+                  class="btn btn-sm text-start text-truncate"
+                  :class="m.winner === m.team1 ? 'btn-success' : 'btn-outline-light'"
+                  :disabled="!m.team1"
+                  @click="pickWinner(rIdx, mIdx, m.team1)"
+                >{{ m.team1 || '—' }}</button>
 
-      <!-- Finale -->
-      <div class="col-md-4">
-        <div class="card bg-dark border-secondary h-100">
-          <div class="card-header"><strong>Finale</strong></div>
-          <div class="card-body">
-            <div v-for="(m, i) in fi" :key="'fi'+i" class="d-flex gap-2 mb-2">
-              <button class="btn btn-sm flex-fill"
-                      :class="m.winner===m.a?'btn-success':'btn-outline-light'"
-                      @click="setWinner('fi', i, m.a)">{{ m.a }}</button>
-              <span class="text-secondary">vs</span>
-              <button class="btn btn-sm flex-fill"
-                      :class="m.winner===m.b?'btn-success':'btn-outline-light'"
-                      @click="setWinner('fi', i, m.b)">{{ m.b }}</button>
+                <button
+                  class="btn btn-sm text-start text-truncate"
+                  :class="m.winner === m.team2 ? 'btn-success' : 'btn-outline-light'"
+                  :disabled="!m.team2"
+                  @click="pickWinner(rIdx, mIdx, m.team2)"
+                >{{ m.team2 || '—' }}</button>
+              </div>
+
+              <small v-if="m.winner" class="text-success d-block mt-1">Sieger: {{ m.winner }}</small>
+              <small v-else class="text-light d-block mt-1">Sieger wählen</small>
+              <hr class="border-secondary opacity-25" />
             </div>
-            <div v-if="fi.length && fi[0].winner" class="text-center mt-3">
-              <div class="h5 text-success">🏆 Sieger: {{ fi[0].winner }}</div>
-            </div>
+
+            <div v-if="!round.matches?.length" class="text-light small">Keine Spiele in dieser Runde</div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="d-flex justify-content-end mt-3">
-      <button class="btn btn-success" :disabled="!finalWinner" @click="$emit('finish', finalWinner)">
-        Turnier abschließen
-      </button>
+    <div class="text-end mt-3 small text-light">
+      Sieger werden automatisch in die nächste Runde propagiert.
     </div>
-  </section>
+  </div>
 </template>
 
 <script setup>
-import { reactive, computed, watchEffect } from 'vue'
+import { ref, watch } from 'vue'
 
 const props = defineProps({
-  seeded: { type: Array, required: true }, // Länge: 8 (oder 4)
-  size:   { type: Number, required: true } // 4 oder 8 (aktuell)
+  rounds: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['back','finish'])
+const emit = defineEmits(['set-winner', 'update:rounds'])
 
-const state = reactive({
-  qf: [],
-  sf: [],
-  fi: []
-})
+const deepClone = (v) => JSON.parse(JSON.stringify(v ?? []))
+const roundsLocal = ref(deepClone(props.rounds))
 
-function buildPairs(list){
-  const pairs = []
-  for(let i=0;i<list.length;i+=2){
-    pairs.push({ a:list[i], b:list[i+1], winner:null })
-  }
-  return pairs
+watch(() => props.rounds, (v) => {
+  roundsLocal.value = deepClone(v)
+}, { deep: true })
+
+function defaultRoundName(idx, total) {
+  const map = ['Achtelfinale', 'Viertelfinale', 'Halbfinale', 'Finale']
+  const fromEnd = total - idx
+  return map[fromEnd - 1] || `Runde ${idx + 1}`
 }
 
-watchEffect(()=>{
-  const s = props.seeded.slice(0, props.size)
-  if (props.size === 8){
-    // Seeding 1-8 (klassisch 1-8, 4-5, 3-6, 2-7)
-    const order = [0,7,3,4,2,5,1,6].map(i => s[i])
-    state.qf = buildPairs(order)
-    state.sf = buildPairs(['?', '?', '?', '?'])
-    state.fi = buildPairs(['?', '?'])
-  } else if (props.size === 4){
-    const order = [0,3,1,2].map(i => s[i])
-    state.qf = [] // kein QF
-    state.sf = buildPairs(order)
-    state.fi = buildPairs(['?', '?'])
-  } else {
-    // Fallback: behandle wie 4
-    const order = [0,3,1,2].map(i => s[i] ?? '?')
-    state.qf = []
-    state.sf = buildPairs(order)
-    state.fi = buildPairs(['?', '?'])
-  }
-})
+function pickWinner(rIdx, mIdx, team) {
+  if (!team) return
+  const r = roundsLocal.value[rIdx]
+  if (!r?.matches?.[mIdx]) return
 
-function setWinner(round, idx, team){
-  const r = state[round]
-  r[idx].winner = team
-  if (round === 'qf'){
-    // map qf winners -> sf
-    const w = state.qf.map(m => m.winner || '?')
-    state.sf = buildPairs([w[0], w[1], w[2], w[3]])
-  }
-  if (round === 'sf'){
-    const w = state.sf.map(m => m.winner || '?')
-    state.fi = buildPairs([w[0], w[1]])
+  r.matches[mIdx].winner = team
+  propagateForward(rIdx)
+
+  emit('set-winner', rIdx, mIdx, team)
+  emit('update:rounds', deepClone(roundsLocal.value))
+}
+
+function autoWinner(t1, t2) {
+  if (t1 && !t2) return t1
+  if (!t1 && t2) return t2
+  return null
+}
+
+function propagateForward(startIdx) {
+  for (let rr = startIdx; rr < roundsLocal.value.length - 1; rr++) {
+    const cur = roundsLocal.value[rr]
+    const nxt = roundsLocal.value[rr + 1]
+
+    nxt.matches.forEach(mm => { mm.team1 = null; mm.team2 = null; mm.winner = null })
+
+    cur.matches.forEach((m, idx) => {
+      const w = m.winner || autoWinner(m.team1, m.team2)
+      if (!w) return
+      const tIdx = Math.floor(idx / 2)
+      const pos  = (idx % 2 === 0) ? 'team1' : 'team2'
+      nxt.matches[tIdx][pos] = w
+    })
   }
 }
 
-const finalWinner = computed(()=> state.fi[0]?.winner || null)
-
-const qf = computed(()=> state.qf)
-const sf = computed(()=> state.sf)
-const fi = computed(()=> state.fi)
+/* HMR für diese Komponente deaktivieren (verhindert instance.job-Fehler beim Hot-Reload) */
+if (import.meta && import.meta.hot) {
+  import.meta.hot.decline()
+}
 </script>
+
+<style scoped>
+.ko-bracket { width: 100%; }
+</style>

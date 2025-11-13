@@ -1,88 +1,62 @@
 <template>
-  <div class="card bg-dark text-light border-secondary h-100 d-flex flex-column">
-    <!-- Header -->
-    <GroupHeader 
-      :group="group"
-      :group-matches="groupMatches"
-      @generate-matches="$emit('generate-matches')"
+  <div class="card bg-dark border-secondary">
+    <GroupHeader
+      :group-name="groupName"
+      :expanded="expandedLocal"
+      @toggle="expandedLocal = !expandedLocal"
     />
 
-    <!-- Tabelle -->
-    <GroupTable
-      :standings="standings"
-      :additional-play-in-teams="additionalPlayInTeams"
-      @toggle-play-in="$emit('toggle-play-in', $event)"
-    />
+    <div v-show="expandedLocal">
+      <!-- Tabelle (aus Matches berechnet) -->
+      <GroupTable :group-name="groupName" :matches="matchesLocal" />
 
-    <!-- Tiebreak-Controls -->
-    <TiebreakControls
-      v-if="shouldShowTiebreakControls"
-      :tiebreak-state="tiebreakState"
-      @start-mini-tiebreak="$emit('start-mini-tiebreak')"
-      @start-rage-cage="$emit('start-rage-cage')"
-    />
+      <div class="px-3 pt-2">
+        <small class="text-light">
+          Klicke auf +/−, um Becher anzupassen. Das Team, das zuerst
+          <strong class="text-white">{{ cupsTarget }}</strong> erreicht, gewinnt automatisch.
+          Zahlen sind direkt editierbar.
+        </small>
+      </div>
 
-    <!-- Mini-Runde Tiebreak -->
-    <TiebreakMini
-      v-if="tiebreakState && tiebreakState.mode === 'mini'"
-      :tiebreak-state="tiebreakState"
-      :group-name="group.name"
-      @set-mini-winner="$emit('set-mini-winner', $event.index, $event.teamName)"
-    />
-
-    <!-- Rage Cage Tiebreak -->
-    <TiebreakRage
-      v-if="tiebreakState && tiebreakState.mode === 'rage'"
-      :tiebreak-state="tiebreakState"
-      @set-rage-loser="$emit('set-rage-loser', $event.teamName)"
-    />
-
-    <!-- Gruppenspiele -->
-    <GroupMatches
-      v-if="groupMatches.length"
-      :group-matches="groupMatches"
-      :tournament="tournament"
-      @update-match="$emit('update-match', $event.index, $event.match)"
-      @update-cups="$emit('update-cups', $event.index, $event.teamField, $event.value)"
-    />
+      <!-- Match-Editor -->
+      <GroupMatches
+        class="mt-2"
+        :group-name="groupName"
+        :cups-target="cupsTarget"
+        :matches="matchesLocal"
+        @update:matches="updateMatches"
+      />
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, watch } from 'vue'
 import GroupHeader from './GroupHeader.vue'
-import GroupTable from './GroupTable.vue'
-import TiebreakControls from './TiebreakControls.vue'
-import TiebreakMini from './TiebreakMini.vue'
-import TiebreakRage from './TiebreakRage.vue'
 import GroupMatches from './GroupMatches.vue'
+import GroupTable from './GroupTable.vue'
 
 const props = defineProps({
-  group: { type: Object, required: true },
-  tournament: { type: Object, required: true },
-  groupMatches: { type: Array, required: true },
-  tiebreakState: { type: Object, default: null },
-  additionalPlayInTeams: { type: Array, default: () => [] },
-  standings: { type: Array, required: true }
+  groupName: { type: String, required: true },
+  cupsTarget: { type: Number, required: true },
+  matches: { type: Array, default: () => [] },
+  expanded: { type: Boolean, default: true }
+})
+const emit = defineEmits(['update:matches', 'update:expanded'])
+
+const expandedLocal = ref(!!props.expanded)
+const matchesLocal = ref([...(props.matches || [])])
+
+watch(() => props.matches, (v) => {
+  matchesLocal.value = [...(v || [])]
+}, { deep: true })
+
+watch(() => expandedLocal.value, (v) => {
+  emit('update:expanded', v)
 })
 
-const emit = defineEmits([
-  'generate-matches',
-  'update-match',
-  'update-cups',
-  'start-mini-tiebreak',
-  'start-rage-cage',
-  'set-mini-winner',
-  'set-rage-loser',
-  'toggle-play-in'
-])
-
-const shouldShowTiebreakControls = computed(() => {
-  if (!props.groupMatches.length) return false
-  const allPlayed = props.groupMatches.every(m => !!m.winner)
-  if (!allPlayed) return false
-  
-  // Vereinfachte Logik - in der Praxis müsste hier der Tiebreak-Status überprüft werden
-  return props.tiebreakState && !props.tiebreakState.resolved
-})
+function updateMatches(ms) {
+  matchesLocal.value = [...ms]
+  emit('update:matches', matchesLocal.value)
+}
 </script>
