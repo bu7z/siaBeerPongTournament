@@ -27,6 +27,7 @@
               </li>
               <li>Je nach Teilnehmeranzahl kann es ein Play-In für die KO-Phase geben.</li>
               <li>Gewertet werden Siege/Niederlagen und getroffene/kassierte Becher.</li>
+	      <li>Anzahl(getroffene Becher) stärker gewichtet als Becher-Differenz</li>
               <li>Der Sieger des Turniers gewinnt einen <strong>Bierkasten</strong>.</li>
             </ul>
           </div>

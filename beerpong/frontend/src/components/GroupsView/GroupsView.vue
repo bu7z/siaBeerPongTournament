@@ -121,7 +121,7 @@
             <!-- Tiebreak-Hinweis (nur nach Gruppen-Abschluss) -->
             <div v-if="perGroupTiebreak[group.name]" class="p-3 border-top border-secondary small">
               <div v-if="perGroupTiebreak[group.name].type === 'RAGE_CAGE_3'" class="text-warning">
-                <strong>Tiebreak:</strong> Rage Cage (exakter 3er-Gleichstand in 3er-Gruppe).
+                <strong>Tiebreak:</strong> exakter 3er-Gleichstand in 3er-Gruppe.
               </div>
               <div v-else-if="perGroupTiebreak[group.name].type === 'REMATCH_3_OF_4'" class="text-info">
                 <strong>Tiebreak:</strong> Mini-Rematch (3 Becher) zwischen Plätzen 2–4 (4er-Gruppe).
